@@ -1,0 +1,71 @@
+//
+// Gui/WinCodeUI.rc: resources for WinCodeUI.exe.
+//
+// Copyright (c) 2026 Ged Murphy. Part of WinCode, GPLv3 or later; see LICENSE.
+//
+// The version numbers come from project() in CMakeLists.txt, passed in as
+// WINCODE_VERSION_MAJOR, _MINOR, _PATCH and _STRING.
+//
+
+#include <windows.h>
+#include "Resource.h"
+
+IDI_WINCODE ICON "WinCode.ico"
+
+//
+// A heading rather than a group box: a themed group box draws its caption in
+// the theme's own colour, which is unreadable in dark mode.
+//
+IDD_SETTINGS DIALOGEX 0, 0, 280, 170
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "WinCode settings"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Popup hotkey", IDC_SETTINGS_HEADING, 7, 7, 266, 10
+    LTEXT           "Opens the popup from any program, with a code on the clipboard already looked up.",
+                    IDC_STATIC, 7, 20, 266, 16
+    CONTROL         "&Win", IDC_HOTKEY_WIN, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 40, 32, 12
+    CONTROL         "&Ctrl", IDC_HOTKEY_CTRL, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 43, 40, 32, 12
+    CONTROL         "&Alt", IDC_HOTKEY_ALT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 79, 40, 28, 12
+    CONTROL         "S&hift", IDC_HOTKEY_SHIFT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 111, 40, 34, 12
+    LTEXT           "+", IDC_STATIC, 149, 42, 8, 8
+    COMBOBOX        IDC_HOTKEY_KEY, 159, 39, 60, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "", IDC_HOTKEY_STATUS, 7, 57, 266, 18
+    CONTROL         "&Start WinCode when I sign in", IDC_STARTUP, "Button", BS_AUTOCHECKBOX | WS_TABSTOP,
+                    7, 80, 266, 12
+    LTEXT           "It then waits in the notification area, so the hotkey works from sign-in.",
+                    IDC_STATIC, 19, 93, 254, 9
+    PUSHBUTTON      "C&lear recent lookups", IDC_CLEAR_RECENT, 7, 110, 84, 14
+    LTEXT           "", IDC_SETTINGS_PATH, 7, 130, 266, 17, SS_NOPREFIX
+    DEFPUSHBUTTON   "OK", IDOK, 169, 150, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 223, 150, 50, 14
+END
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     WINCODE_VERSION_MAJOR, WINCODE_VERSION_MINOR, WINCODE_VERSION_PATCH, 0
+PRODUCTVERSION  WINCODE_VERSION_MAJOR, WINCODE_VERSION_MINOR, WINCODE_VERSION_PATCH, 0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Ged Murphy"
+            VALUE "FileDescription", "WinCode"
+            VALUE "FileVersion", WINCODE_VERSION_STRING
+            VALUE "InternalName", "WinCodeUI"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Ged Murphy. GPLv3 or later."
+            VALUE "OriginalFilename", "WinCodeUI.exe"
+            VALUE "ProductName", "WinCode"
+            VALUE "ProductVersion", WINCODE_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
