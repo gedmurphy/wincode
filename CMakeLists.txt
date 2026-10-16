@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Ged Murphy. GPLv3 or later; see LICENSE.
 #
 cmake_minimum_required(VERSION 3.25)
-project(WinCode VERSION 2.0.0 LANGUAGES CXX RC)
+project(WinCode VERSION 2.1.1 LANGUAGES CXX RC)
 
 if(NOT MSVC)
     message(FATAL_ERROR "WinCode builds with MSVC only.")
@@ -97,6 +97,7 @@ target_link_libraries(wincode PRIVATE WinCodeCore)
 # clash with wincode.exe in the same directory.
 #
 add_executable(WinCodeUI WIN32
+    Gui/ClearButton.cpp
     Gui/DetailsPane.cpp
     Gui/Draw.cpp
     Gui/Hotkey.cpp
@@ -151,6 +152,25 @@ add_executable(WinCodeTests
     Tests/WinCodeTests.cpp)
 target_link_libraries(WinCodeTests PRIVATE WinCodeCore)
 add_test(NAME WinCodeTests COMMAND WinCodeTests)
+
+#
+# The tests check their pool tag header against what cl's preprocessor makes of
+# it, and a header that doesn't preprocess fails the build.
+#
+set(WINCODE_TEST_DATA "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Data")
+set(WINCODE_TEST_PREPROCESSED "${CMAKE_CURRENT_BINARY_DIR}/PoolTagDef.i")
+add_custom_command(
+    OUTPUT "${WINCODE_TEST_PREPROCESSED}"
+    COMMAND "${CMAKE_CXX_COMPILER}" /nologo /EP /P "/Fi${WINCODE_TEST_PREPROCESSED}"
+            /Tp "${WINCODE_TEST_DATA}/PoolTagDef.h"
+    DEPENDS "${WINCODE_TEST_DATA}/PoolTagDef.h"
+    COMMENT "Preprocessing the pool tag test header"
+    VERBATIM)
+add_custom_target(PoolTagDefPreprocessed DEPENDS "${WINCODE_TEST_PREPROCESSED}")
+add_dependencies(WinCodeTests PoolTagDefPreprocessed)
+target_compile_definitions(WinCodeTests PRIVATE
+    "WINCODE_TEST_DATA=L\"${WINCODE_TEST_DATA}\""
+    "WINCODE_TEST_PREPROCESSED=L\"${WINCODE_TEST_PREPROCESSED}\"")
 
 #
 # End to end checks of the CLI: each runs wincode and looks for what it should

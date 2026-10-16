@@ -269,11 +269,15 @@ ShowHeaderDetails (
     }
     else if (header->Skipped.empty())
     {
-        details = std::format(L"{}\r\n\r\nEvery definition that looks like a code was read.", header->Path);
+        details = std::format(L"{}\r\nRead as a {}.\r\n\r\nEvery definition that looks like a code was read.",
+                              header->Path,
+                              header->Format);
     }
     else
     {
-        details = std::format(L"{}\r\n\r\nThese look like codes, but WinCode couldn't work out their values:", header->Path);
+        details = std::format(L"{}\r\nRead as a {}.\r\n\r\nThese look like codes, but WinCode couldn't work out their values:",
+                              header->Path,
+                              header->Format);
         for (const HeaderSkip& skip : header->Skipped)
         {
             details += std::format(L"\r\nLine {}, {}: {}", skip.Line, skip.Name, skip.Reason);
@@ -394,12 +398,7 @@ ChooseHeader (
     _Out_ std::wstring* Path
     )
 {
-    static const COMDLG_FILTERSPEC k_Filters[] =
-    {
-        { L"Header files", L"*.h;*.hpp" },
-        { L"All files", L"*.*" }
-    };
-
+    std::wstring patterns;
     IFileOpenDialog* picker;
     IShellItem* item;
     PWSTR chosen;
@@ -416,8 +415,18 @@ ChooseHeader (
         return false;
     }
 
-    picker->SetFileTypes(ARRAYSIZE(k_Filters), k_Filters);
-    picker->SetTitle(L"Add a header of your codes");
+    //
+    // Whatever the formats read, so a new one shows up here too.
+    //
+    patterns = UserCodeFilePatterns();
+    COMDLG_FILTERSPEC filters[] =
+    {
+        { L"Headers and tag lists", patterns.c_str() },
+        { L"All files", L"*.*" }
+    };
+
+    picker->SetFileTypes(ARRAYSIZE(filters), filters);
+    picker->SetTitle(L"Add a file of your codes");
 
     if (SUCCEEDED(picker->Show(Dialog)) &&
         SUCCEEDED(picker->GetResult(&item)) &&
@@ -457,7 +466,7 @@ SetUpDialog (
 {
     static constexpr PCWSTR k_Columns[] = { L"Header", L"Codes", L"Skipped", L"Where" };
     static constexpr int k_Widths[] = { 45, 15, 15, 25 };
-    static constexpr PCWSTR k_TreatAs[] = { L"Decide from each code", L"NTSTATUS codes", L"HRESULTs", L"Win32 errors" };
+    static constexpr PCWSTR k_TreatAs[] = { L"Decide from each code", L"NTSTATUS codes", L"HRESULTs", L"Win32 errors", L"Pool tags", L"IOCTLs" };
 
     LVCOLUMNW column = {};
     LOGFONTW font;

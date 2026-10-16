@@ -942,8 +942,13 @@ UpdateHistoryButtons (
     EnableWindow(g_BackButton, !g_Back.empty());
     EnableWindow(g_ForwardButton, !g_Forward.empty());
 
-    SetTooltip(g_BackButton, g_Back.empty() ? std::wstring(L"Back") : (L"Back to " + g_Back.back().Label));
-    SetTooltip(g_ForwardButton, g_Forward.empty() ? std::wstring(L"Forward") : (L"Forward to " + g_Forward.back().Label));
+    //
+    // A place with no label is a cleared box, which has nothing to name.
+    //
+    SetTooltip(g_BackButton,
+               (g_Back.empty() || g_Back.back().Label.empty()) ? std::wstring(L"Back") : (L"Back to " + g_Back.back().Label));
+    SetTooltip(g_ForwardButton,
+               (g_Forward.empty() || g_Forward.back().Label.empty()) ? std::wstring(L"Forward") : (L"Forward to " + g_Forward.back().Label));
 }
 
 
@@ -1074,6 +1079,31 @@ MoveThroughHistory (
 
     GoTo(place);
     UpdateHistoryButtons();
+}
+
+
+/*!
+
+    @brief Empties the search box, from its × or Esc, ready to type again.
+
+    @details Unlike typing, this goes on Back, so a clear by mistake is one
+             click to undo.
+
+*/
+static
+void
+ClearQuery (
+    void
+    )
+{
+    if (GetWindowTextLengthW(g_SearchEdit) > 0)
+    {
+        PushHistory();
+        GoTo(HistoryEntry());
+        UpdateHistoryButtons();
+    }
+
+    SetFocus(g_SearchEdit);
 }
 
 
@@ -2088,6 +2118,7 @@ CreateControls (
 
     SendMessageW(g_SearchEdit, EM_SETCUEBANNER, TRUE, RCAST(LPARAM)(L"Look up a code or a name, or paste log text"));
     SetWindowSubclass(g_SearchEdit, SearchEditProc, 0, 0);
+    ClearButtonAttach(g_SearchEdit, IDC_CLEAR);
 
     AddTooltip(g_BackButton, L"Back");
     AddTooltip(g_ForwardButton, L"Forward");
@@ -2276,9 +2307,21 @@ MainWindowProc (
         switch (LOWORD(WParam))
         {
         case IDC_SEARCH:
-            if ((HIWORD(WParam) == EN_CHANGE) && !g_SettingQuery)
+            if (HIWORD(WParam) == EN_CHANGE)
             {
-                RunQuery();
+                ClearButtonSync(g_SearchEdit);
+
+                if (!g_SettingQuery)
+                {
+                    RunQuery();
+                }
+            }
+            return 0;
+
+        case IDC_CLEAR:
+            if (HIWORD(WParam) == BN_CLICKED)
+            {
+                ClearQuery();
             }
             return 0;
 
@@ -2316,8 +2359,7 @@ MainWindowProc (
             return 0;
 
         case IDCANCEL:
-            SetWindowTextW(g_SearchEdit, L"");
-            SetFocus(g_SearchEdit);
+            ClearQuery();
             return 0;
         }
         break;

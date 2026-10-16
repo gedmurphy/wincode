@@ -1144,6 +1144,7 @@ TestUserCodes (
         L"// again.\n"
         L"//\n"
         L"#define MYDRV_STATUS_RETRY ((NTSTATUS)0x60010002L)\n"
+        L"#define MYDRV_CANCEL_TAG '!!rL'\n"
         L"#endif\n";
 
     static constexpr WCHAR k_Other[] =
@@ -1262,6 +1263,9 @@ TestUserCodes (
     Check((match != nullptr) && (match->Names.size() == 2) && (match->Names[0] == L"MTag") && (match->Names[1] == L"MYDRV_TAG"),
           "a pool tag is named by its tag, then the header's name for it");
 
+    names = SearchNames(L"Lr!!");
+    Check((names.size() == 1) && (names[0].Name == L"Lr!!"), "a tag both Windows and your header have is found once");
+
     names = SearchNames(L"MYDRV_E_TIMEOUT");
     Check(!names.empty() && (names[0].Kind == CodeKind::HResult) && (names[0].Value == 0x81230002), "a name search finds the user's codes");
 
@@ -1376,6 +1380,279 @@ TestIoctls (
 
 /*!
 
+    @brief Checks the other ways files write codes: macro calls, enum members
+           and constants, Microsoft's rxpooltg.h, tag lists, and Treat as.
+
+*/
+static
+void
+TestCodeFormats (
+    void
+    )
+{
+    //
+    // The macro's defined after its first use, as can happen when it lives
+    // in a shared header read later.
+    //
+    static constexpr WCHAR k_Tags[] =
+        L"POOLTAG_DEF(TEST_TAG_, 'gatT') // optional comment describing the pooltag\n"
+        L"#define POOLTAG_DEF(Name, Value) Name = Value\n"
+        L"enum MY_TAGS\n"
+        L"{\n"
+        L"    POOLTAG_DEF(ENUM_CALL_TAG, 'llaC'),\n"
+        L"    PLAIN_ENUM_TAG = 'nmuE', // a plain member\n"
+        L"    NOT_A_TAG = 5,\n"
+        L"};\n"
+        L"constexpr ULONG k_ConstTag = 'tsnC';\n"
+        L"inline void Example() { ULONG status = 'xxxx'; }\n";
+
+    static constexpr WCHAR k_Shared[] =
+        L"#define SHARED_DEF(Name, Value) Name = Value,\n";
+
+    static constexpr WCHAR k_UsesShared[] =
+        L"enum { SHARED_DEF(SHARED_TAG, 'srhS') };\n";
+
+    static constexpr WCHAR k_CallsOnly[] =
+        L"POOLTAG_DEF(TEST_TAG_, 'gatT') // comment\n"
+        L"extern \"C\" {\n"
+        L"POOLTAG_DEF(EXTERN_TAG, 'ntxE')\n"
+        L"}\n"
+        L"LONG_DEF(LONG_TAG, 'gnoL', \"a description\")\n"
+        L"DEFINE_GUID(MY_GUID, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xA, 0xB);\n"
+        L"inline void Clear() { RtlZeroMemory(Buffer, 'xxxx'); }\n";
+
+    static constexpr WCHAR k_Rx[] =
+        L"#define RX_MISC_POOLTAG         ('sMxR')\n"
+        L"extern ULONG RxExplodePoolTags;\n"
+        L"#define RX_DEFINE_POOLTAG(ExplodedPoolTag,DefaultPoolTag)  \\\n"
+        L"        ((RxExplodePoolTags == 0) ? (DefaultPoolTag) : (ExplodedPoolTag))\n"
+        L"#define RX_TIMER_POOLTAG          RX_DEFINE_POOLTAG('mTxR',RX_MISC_POOLTAG)\n"
+        L"#define PICKED_TAG (1 == 1 ? 'aaaA' : 'bbbB')\n";
+
+    static constexpr WCHAR k_List[] =
+        L"rem My driver's tags\n"
+        L"\n"
+        L"LstT - mydrv.sys - request context\n"
+        L"Ls2  - <unknown>  - a short one\n";
+
+    static constexpr WCHAR k_Plain[] =
+        L"#define PLAIN_TAG 0x67617450\n"
+        L"#define PLAIN_SIZE 256\n";
+
+    std::vector<HeaderRead> reads;
+    std::vector<CodeMatch> matches;
+    const CodeMatch* match;
+
+    printf("Code file formats\n");
+
+    auto FindCode = [&reads](size_t File, PCWSTR Name) -> const HeaderCode*
+    {
+        for (const HeaderCode& candidate : reads[File].Codes)
+        {
+            if (candidate.Name == Name)
+            {
+                return &candidate;
+            }
+        }
+
+        return nullptr;
+    };
+
+    reads = ReadHeaders({ { L"tags.h", k_Tags, UserTreatAs::Automatic } });
+    Check((FindCode(0, L"TEST_TAG_") != nullptr) && (FindCode(0, L"TEST_TAG_")->Tag == L"Ttag") &&
+          (FindCode(0, L"TEST_TAG_")->Text == L"Optional comment describing the pooltag."),
+          "a macro call that comes down to Name = 'tag' is a pool tag, with its comment, before the macro's defined");
+    Check((FindCode(0, L"ENUM_CALL_TAG") != nullptr) && (FindCode(0, L"ENUM_CALL_TAG")->Tag == L"Call"),
+          "... and inside an enum");
+    Check((FindCode(0, L"PLAIN_ENUM_TAG") != nullptr) && (FindCode(0, L"PLAIN_ENUM_TAG")->Text == L"A plain member."),
+          "a plain enum member is read");
+    Check((FindCode(0, L"k_ConstTag") != nullptr) && (FindCode(0, L"k_ConstTag")->Tag == L"Cnst"), "so is a constexpr constant");
+    Check((FindCode(0, L"NOT_A_TAG") == nullptr) && (FindCode(0, L"status") == nullptr),
+          "but not a plain number, or an assignment in an inline function");
+    Check((reads[0].Format != nullptr) && (wcscmp(reads[0].Format, L"C/C++ header") == 0), "it's read as a C/C++ header");
+
+    reads = ReadHeaders({ { L"uses.h", k_UsesShared, UserTreatAs::Automatic }, { L"shared.h", k_Shared, UserTreatAs::Automatic } });
+    Check((FindCode(0, L"SHARED_TAG") != nullptr) && (FindCode(0, L"SHARED_TAG")->Tag == L"Shrs"),
+          "a macro from another header works, even with its own comma");
+
+    reads = ReadHeaders({ { L"tags.h", k_CallsOnly, UserTreatAs::Automatic } });
+    Check((FindCode(0, L"TEST_TAG_") != nullptr) && (FindCode(0, L"TEST_TAG_")->Tag == L"Ttag") &&
+          (FindCode(0, L"TEST_TAG_")->Text == L"Comment."),
+          "a call to a macro from a header we don't have is read as Name = Value");
+    Check((FindCode(0, L"EXTERN_TAG") != nullptr) && (FindCode(0, L"EXTERN_TAG")->Tag == L"Extn"), "... in an extern \"C\" block too");
+    Check((FindCode(0, L"Buffer") == nullptr) && (FindCode(0, L"Size") == nullptr), "but not a call inside a function");
+    Check((FindCode(0, L"LONG_TAG") == nullptr) && (reads[0].Skipped.size() == 1) && (reads[0].Skipped[0].Name == L"LONG_TAG") &&
+          (reads[0].Skipped[0].Reason == L"LONG_DEF isn't defined in any header WinCode reads"),
+          "and a longer call with a tag in it is skipped, saying why");
+
+    reads = ReadHeaders({ { L"rxpooltg.h", k_Rx, UserTreatAs::Automatic } });
+    Check((FindCode(0, L"RX_TIMER_POOLTAG") != nullptr) && (FindCode(0, L"RX_TIMER_POOLTAG")->Tag == L"RxTm"),
+          "rxpooltg.h's RX_DEFINE_POOLTAG is its own tag, though it picks at run time");
+    Check((FindCode(0, L"PICKED_TAG") != nullptr) && (FindCode(0, L"PICKED_TAG")->Tag == L"Aaaa"), "a ?: that can be worked out is");
+    Check(reads[0].Skipped.empty(), "... and nothing's skipped");
+
+    reads = ReadHeaders({ { L"tags.txt", k_List, UserTreatAs::Automatic } });
+    Check((reads[0].Format != nullptr) && (wcscmp(reads[0].Format, L"pool tag list") == 0), "pooltag.txt's format is a tag list");
+    Check((reads[0].Codes.size() == 2) && (reads[0].Codes[0].Value == 0x5474734C) && (reads[0].Codes[0].Text == L"mydrv.sys: request context") &&
+          (reads[0].Codes[1].Value == 0x2032734C) && (reads[0].Codes[1].Text == L"a short one"),
+          "... with each tag as a debugger shows it, and its binary and description");
+
+    reads = ReadHeaders({ { L"plain.h", k_Plain, UserTreatAs::PoolTag } });
+    Check((FindCode(0, L"PLAIN_TAG") != nullptr) && (FindCode(0, L"PLAIN_TAG")->Tag == L"Ptag") &&
+          (FindCode(0, L"PLAIN_SIZE") == nullptr) && reads[0].Skipped.empty(),
+          "Treat as pool tags makes plain numbers tags, and quietly leaves out ones that can't be");
+
+    reads = ReadHeaders({ { L"plain.h", L"#define MY_IOCTL 0x222004\n", UserTreatAs::Ioctl } });
+    Check((FindCode(0, L"MY_IOCTL") != nullptr) && (FindCode(0, L"MY_IOCTL")->Kind == CodeKind::Ioctl), "Treat as IOCTLs makes them IOCTLs");
+
+    Check(IsUserCodeFileName(L"tags.TXT") && IsUserCodeFileName(L"mydrv.h") && !IsUserCodeFileName(L"notes.doc"),
+          "the codes folder reads every format's files");
+
+    //
+    // FMPP is fltmgr's FM?? to pooltag.txt, which your own name for it beats.
+    //
+    LoadUserCodeText({ { L"C:\\src\\mydrv.h", L"#define MY_FLT_TAG 'PPMF'\n", UserTreatAs::Automatic } });
+    matches = LookupValue(0x50504D46);
+    match = FindMatch(matches, CodeKind::PoolTag);
+    Check((match != nullptr) && match->UserCode, "your exact tag beats a pooltag.txt pattern");
+
+    LoadUserCodeText({});
+    matches = LookupValue(0x50504D46);
+    match = FindMatch(matches, CodeKind::PoolTag);
+    Check((match != nullptr) && (match->Names.size() == 2) && (match->Names[1] == L"FM??"), "... which is back without it");
+}
+
+
+/*!
+
+    @brief Checks a header of POOLTAG_DEF calls against what the compiler's
+           preprocessor makes of it.
+
+    @details The build runs Tests/Data/PoolTagDef.h through cl /EP, so a
+             header that doesn't preprocess fails the build. Each Name = 'tag'
+             it comes out with has to be one of ours, with the same value.
+
+*/
+static
+void
+TestPoolTagHeader (
+    void
+    )
+{
+    std::wstring header;
+    std::wstring expanded;
+    std::vector<HeaderRead> reads;
+    std::vector<CodeMatch> matches;
+    std::vector<NameMatch> names;
+    const CodeMatch* match;
+    size_t compared;
+    size_t agreed;
+
+    printf("A header of pool tag macros\n");
+
+    if (!ReadHeaderFile(WINCODE_TEST_DATA L"/PoolTagDef.h", &header) ||
+        !ReadHeaderFile(WINCODE_TEST_PREPROCESSED, &expanded))
+    {
+        Check(false, "the test header and its preprocessed copy can be read");
+        return;
+    }
+
+    reads = ReadHeaders({ { L"PoolTagDef.h", header, UserTreatAs::Automatic } });
+
+    auto FindCode = [&reads](const std::wstring& Name) -> const HeaderCode*
+    {
+        for (const HeaderCode& candidate : reads[0].Codes)
+        {
+            if (candidate.Name == Name)
+            {
+                return &candidate;
+            }
+        }
+
+        return nullptr;
+    };
+
+    compared = 0;
+    agreed = 0;
+
+    for (size_t start = 0; start < expanded.size(); )
+    {
+        size_t end = expanded.find(L'\n', start);
+        std::wstring line;
+        size_t equals;
+        size_t open;
+        uint32_t value;
+        const HeaderCode* code;
+
+        if (end == std::wstring::npos)
+        {
+            end = expanded.size();
+        }
+
+        line = expanded.substr(start, end - start);
+        start = end + 1;
+
+        equals = line.find(L" = '");
+        if (equals == std::wstring::npos)
+        {
+            continue;
+        }
+
+        //
+        // A multi-character constant puts its first character in the top
+        // byte, which is how cl works out each tag's value.
+        //
+        open = equals + 4;
+        if ((open + 5 > line.size()) || (line[open + 4] != L'\''))
+        {
+            continue;
+        }
+
+        value = 0;
+        for (size_t i = 0; i < 4; i++)
+        {
+            value = (value << 8) | SCAST(uint8_t)(line[open + i]);
+        }
+
+        compared++;
+        code = FindCode(line.substr(line.find_first_not_of(L" \t"), equals - line.find_first_not_of(L" \t")));
+        if ((code != nullptr) && (code->Kind == CodeKind::PoolTag) && (code->Value == value))
+        {
+            agreed++;
+        }
+    }
+
+    Check(compared == 10, "the preprocessor expands all ten calls");
+    Check((agreed == compared) && (reads[0].Codes.size() == compared) && reads[0].Skipped.empty(),
+          "... and we read each one as the same pool tag, with nothing skipped");
+    Check((FindCode(L"TEST_TAG1") != nullptr) && (FindCode(L"TEST_TAG1")->Tag == L"Tta1") &&
+          (FindCode(L"TEST_TAG1")->Text == L"Optional comment describing the pooltag."),
+          "a tag is named as a debugger shows it, with its comment");
+    Check((FindCode(L"TEST_TAG2") != nullptr) && (FindCode(L"TEST_TAG2")->Text == L"Comment 2.") &&
+          (FindCode(L"TEST_TAG7") != nullptr) && (FindCode(L"TEST_TAG7")->Text == L"A block comment.") &&
+          (FindCode(L"TEST_TAG3") != nullptr) && FindCode(L"TEST_TAG3")->Text.empty(),
+          "... however far away the comment is, a block comment too, and no comment's fine");
+    Check((FindCode(L"TEST_TAG8") != nullptr) && (FindCode(L"TEST_TAG8")->Tag == L"Tt8"),
+          "a tag can end in a space, which is dropped from its name as Irp's is");
+
+    LoadUserCodeText({ { L"C:\\src\\PoolTagDef.h", header, UserTreatAs::Automatic } });
+    matches = LookupValue(0x31617454);
+    match = FindMatch(matches, CodeKind::PoolTag);
+    Check((match != nullptr) && match->UserCode && (match->Names.size() == 2) && (match->Names[1] == L"TEST_TAG1"),
+          "it's found as one of your codes by value");
+
+    names = SearchNames(L"Tta1");
+    Check(!names.empty() && (names[0].Kind == CodeKind::PoolTag) && (names[0].Value == 0x31617454), "... by the tag");
+
+    names = SearchNames(L"TEST_TAG2");
+    Check(!names.empty() && (names[0].Kind == CodeKind::PoolTag) && (names[0].Value == 0x32617454), "... and by its name");
+
+    LoadUserCodeText({});
+}
+
+
+/*!
+
     @brief Checks comparing versions, which the update check relies on.
 
 */
@@ -1465,6 +1742,7 @@ TestPoolTags (
     std::vector<CodeMatch> matches;
     std::vector<NameMatch> names;
     const CodeMatch* match;
+    ParsedQuery parsed;
 
     printf("Pool tags\n");
 
@@ -1477,6 +1755,55 @@ TestPoolTags (
     names = SearchNames(L"MmSt");
     Check(!names.empty() && (names[0].Kind == CodeKind::PoolTag) && (names[0].Name == L"MmSt"),
           "the tag MmSt is found by name");
+
+    matches = LookupValue(0x35306847);
+    match = FindMatch(matches, CodeKind::PoolTag);
+    Check((match != nullptr) && (match->Names.size() == 2) && (match->Names[0] == L"Gh05") && (match->Names[1] == L"Gh?5"),
+          "Gh05 is pooltag.txt's Gh?5, the most specific pattern that fits");
+
+    names = SearchNames(L"gh05");
+    Check(!names.empty() && (names[0].Kind == CodeKind::PoolTag) && (names[0].Name == L"Gh05") &&
+          (names[0].Value == 0x35306847) && (names[0].Quality == NameQuality::Exact),
+          "... and typing gh05 finds it, as Gh05");
+
+    names = SearchNames(L"Ntfx");
+    Check(!names.empty() && (names[0].Name == L"Ntfx") && (names[0].Value == 0x7866744E),
+          "tags are case sensitive, so Ntfx is ntfs.sys's Nt?? rather than the tag NtFX");
+
+    names = SearchNames(L"Lr!!");
+    Check(!names.empty() && (names[0].Name == L"Lr!!"), "a tag with punctuation is found by name");
+
+    parsed = ParseQuery(L"Lr!!");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"Lr!!"), "... and keeps its punctuation as a query");
+
+    parsed = ParseQuery(L"Pool tag: Ntfx");
+    Check(parsed.Numbers.empty() && (parsed.Names.size() == 1) && (parsed.Names[0] == L"Ntfx"),
+          "a tag after a label is a name in longer text");
+
+    parsed = ParseQuery(L"ffffa50f`6a2d1000 size: 60 previous size: 0  (Allocated) *MmSt");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"MmSt"), "... as is the tag in a line from !pool");
+
+    parsed = ParseQuery(L"Pooltag Irp+ : I/O verifier allocated IRP packets");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"Irp+"), "... and in !pool's Pooltag line");
+
+    parsed = ParseQuery(L"tag 'Irp '");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"Irp"), "... and in quotes, with its space");
+
+    parsed = ParseQuery(L"AfdA");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"AfdA") && !parsed.Numbers.empty(),
+          "a tag that reads as hex, like AfdA, is a name as well as a number");
+
+    parsed = ParseQuery(L"8042");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"8042"), "... as is one of digits, like 8042");
+
+    parsed = ParseQuery(L"dead");
+    Check(parsed.Names.empty(), "... but a hex word that isn't a tag isn't");
+
+    parsed = ParseQuery(L"tag 5");
+    Check(parsed.Names.empty() && !parsed.Numbers.empty(), "\"tag 5\" is still a number");
+
+    parsed = ParseQuery(L"File not found (0x80070002)");
+    Check(parsed.Names.empty(), "a word that's also a tag, like File, isn't one unless it's labelled");
 
     matches = LookupValue(43);
     match = FindMatch(matches, CodeKind::DeviceProblem);
@@ -1679,6 +2006,8 @@ wmain (
     TestSourceShows();
     TestUserCodes();
     TestIoctls();
+    TestCodeFormats();
+    TestPoolTagHeader();
 
     printf("\n%s (%d failures)\n", (g_Failures == 0) ? "PASS" : "FAILURES", g_Failures);
     return g_Failures;

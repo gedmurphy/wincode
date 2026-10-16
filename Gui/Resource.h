@@ -53,6 +53,7 @@
 #define IDC_DETAILS             1007
 #define IDC_SETTINGSBUTTON      1008
 #define IDC_FILTER              1009
+#define IDC_CLEAR               1010
 
 //
 // The settings dialog.

@@ -5,8 +5,8 @@
     @brief Your own codes, which headers they come from and the tables built
            from them.
 
-    @details Your headers live in the codes folder beside settings.json, and
-             wherever "codes.files" points. ReadHeaders reads them together so
+    @details Your headers, and tag lists, live in the codes folder beside
+             settings.json, and wherever "codes.files" points. ReadHeaders reads them together so
              one can use another's names, and each becomes up to five tables,
              one per kind. They sit after the built-in tables in AllKindTables,
              so lookups and searches treat them like any other.
@@ -211,6 +211,12 @@ TreatAsName (
     case UserTreatAs::WinError:
         return L"win32";
 
+    case UserTreatAs::PoolTag:
+        return L"pooltag";
+
+    case UserTreatAs::Ioctl:
+        return L"ioctl";
+
     default:
         return L"automatic";
     }
@@ -273,6 +279,7 @@ BuildStore (
         status.TreatAs = Headers[i].Source.TreatAs;
         status.CodeCount = reads[i].Codes.size();
         status.Skipped = reads[i].Skipped;
+        status.Format = Headers[i].Readable ? reads[i].Format : L"";
         store->Headers.push_back(status);
 
         key = store->WideStrings.emplace_back(status.Key).c_str();
@@ -304,6 +311,14 @@ BuildStore (
                 {
                     entry.Name = store->Strings.emplace_back(WideToUtf8(code.Tag)).c_str();
                     table.Entries.push_back(entry);
+                }
+
+                //
+                // A tag list's tags have no other name.
+                //
+                if ((kind == CodeKind::PoolTag) && (code.Name == code.Tag))
+                {
+                    continue;
                 }
 
                 entry.Name = store->Strings.emplace_back(WideToUtf8(code.Name)).c_str();
@@ -447,26 +462,6 @@ FullPath (
 
 /*!
 
-    @brief Whether a file name is a header's.
-
-*/
-static
-bool
-IsHeaderName (
-    _In_ const std::wstring& Name
-    )
-{
-    std::wstring lower;
-
-    lower = Lower(Name);
-
-    return ((lower.size() > 2) && (lower.compare(lower.size() - 2, 2, L".h") == 0)) ||
-           ((lower.size() > 4) && (lower.compare(lower.size() - 4, 4, L".hpp") == 0));
-}
-
-
-/*!
-
     @brief Every table, the built-in ones in g_KindTables and then any built
            from your headers.
 
@@ -554,7 +549,7 @@ LoadUserCodes (
         {
             do
             {
-                if (((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) && IsHeaderName(found.cFileName))
+                if (((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) && IsUserCodeFileName(found.cFileName))
                 {
                     files.push_back(folder + L"\\" + found.cFileName);
                 }
@@ -618,6 +613,14 @@ LoadUserCodes (
         else if (name == L"win32")
         {
             pending.Source.TreatAs = UserTreatAs::WinError;
+        }
+        else if (name == L"pooltag")
+        {
+            pending.Source.TreatAs = UserTreatAs::PoolTag;
+        }
+        else if (name == L"ioctl")
+        {
+            pending.Source.TreatAs = UserTreatAs::Ioctl;
         }
     }
 

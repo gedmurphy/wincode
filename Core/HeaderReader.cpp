@@ -2,14 +2,21 @@
 
     @file Core/HeaderReader.cpp
 
-    @brief Reads the user's own header files for the codes they define,
-           without a compiler.
+    @brief Reads the user's own files for the codes they define, without a
+           compiler.
 
-    @details An installed WinCode has no compiler, so we evaluate #defines
-             ourselves. That covers what code headers hold, so numbers, casts,
-             character constants, simple arithmetic, the SDK's code macros
-             (MAKE_HRESULT, _HRESULT_TYPEDEF_ and so on), your own function
-             like macros built on them, and names from your headers or the SDK.
+    @details Files come in the formats in k_Formats, C and C++ headers and
+             pooltag.txt style tag lists so far, each picked by what's in the
+             file.
+
+             An installed WinCode has no compiler, so we evaluate a header's
+             definitions ourselves. They're #defines, and enum members,
+             constants and calls to the header's own macros that come down to
+             Name = value, as in POOLTAG_DEF(MY_TAG, 'gaTM'). That covers
+             numbers, casts, character constants, simple arithmetic, ?:, the
+             SDK's code macros (MAKE_HRESULT, _HRESULT_TYPEDEF_ and so on), your
+             own function-like macros built on them, and names from your
+             headers or the SDK.
 
              Conditionals aren't evaluated. Where a name's defined twice, as in
              both halves of an #if, the first one wins, as in the generator.
@@ -165,7 +172,43 @@ struct Resolution
 
 /*!
 
-    @brief Everything read from the headers, and what's been evaluated so far.
+    @brief What a statement is inside of, as far as its braces say.
+
+*/
+enum class StatementScope
+{
+    //
+    // The file itself, or an extern "C" or namespace block.
+    //
+    File,
+    Enum,
+
+    //
+    // Anything else, like a function's body or a struct.
+    //
+    Other,
+};
+
+
+/*!
+
+    @brief A line of a header that isn't a directive, kept to look for
+           definitions written as enum members, constants or macro calls once
+           every #define is known.
+
+*/
+struct Statement
+{
+    size_t Header;
+    uint32_t Line;
+    std::wstring Code;
+    std::wstring Comment;
+};
+
+
+/*!
+
+    @brief Everything read from the files, and what's been evaluated so far.
 
 */
 struct HeaderContext
@@ -179,6 +222,14 @@ struct HeaderContext
 
     std::unordered_map<std::wstring, std::wstring> MessageTexts;
     std::unordered_map<std::wstring, Resolution> Resolved;
+
+    std::vector<Statement> Statements;
+
+    //
+    // What a file in a format with no expressions, like a tag list, gave
+    // straight away, by file.
+    //
+    std::vector<HeaderRead>* Results;
 };
 
 
@@ -385,7 +436,8 @@ Tokenize (
     _Out_ std::wstring* Error
     )
 {
-    static constexpr WCHAR k_Single[] = L"(),|&^~!+-*/%";
+    static constexpr WCHAR k_Single[] = L"(),|&^~!+-*/%?:<>";
+    static constexpr PCWSTR k_Double[] = { L"<<", L">>", L"<=", L">=", L"==", L"!=" };
 
     std::wstring digits;
     uint64_t value;
@@ -396,6 +448,7 @@ Tokenize (
     int digit;
     WCHAR c;
     bool isLong;
+    bool isPair;
 
     Tokens->clear();
     Error->clear();
@@ -541,14 +594,24 @@ Tokenize (
             continue;
         }
 
-        if (((c == L'<') || (c == L'>')) && ((i + 1) < Text.size()) && (Text[i + 1] == c))
+        isPair = false;
+        for (PCWSTR pair : k_Double)
+        {
+            if (Text.compare(i, 2, pair) == 0)
+            {
+                isPair = true;
+                break;
+            }
+        }
+
+        if (isPair)
         {
             Tokens->push_back({ TokenKind::Punctuation, 0, Text.substr(i, 2), false });
             i += 2;
             continue;
         }
 
-        if (wcschr(k_Single, c) != nullptr)
+        if ((c != L'\0') && (wcschr(k_Single, c) != nullptr))
         {
             //
             // && and || are logic, not the bit arithmetic codes are made with.
@@ -609,7 +672,7 @@ Peek (
 }
 
 
-static bool ParseOr(Parser& State, Evaluated* Result);
+static bool ParseConditional(Parser& State, Evaluated* Result);
 static bool ParseUnary(Parser& State, Evaluated* Result);
 
 
@@ -1037,7 +1100,7 @@ ParsePrimary (
     }
 
     State.Position++;
-    if (!ParseOr(State, Result))
+    if (!ParseConditional(State, Result))
     {
         return false;
     }
@@ -1174,42 +1237,40 @@ ParseLevel (
             return false;
         }
 
-        switch (op[0])
+        if (wcscmp(op, L"|") == 0)
         {
-        case L'|':
             Result->Value |= right.Value;
-            break;
-
-        case L'^':
+        }
+        else if (wcscmp(op, L"^") == 0)
+        {
             Result->Value ^= right.Value;
-            break;
-
-        case L'&':
+        }
+        else if (wcscmp(op, L"&") == 0)
+        {
             Result->Value &= right.Value;
-            break;
-
-        case L'<':
+        }
+        else if (wcscmp(op, L"<<") == 0)
+        {
             Result->Value = (right.Value < 64) ? (Result->Value << right.Value) : 0;
-            break;
-
-        case L'>':
+        }
+        else if (wcscmp(op, L">>") == 0)
+        {
             Result->Value = (right.Value < 64) ? (Result->Value >> right.Value) : 0;
-            break;
-
-        case L'+':
+        }
+        else if (wcscmp(op, L"+") == 0)
+        {
             Result->Value += right.Value;
-            break;
-
-        case L'-':
+        }
+        else if (wcscmp(op, L"-") == 0)
+        {
             Result->Value -= right.Value;
-            break;
-
-        case L'*':
+        }
+        else if (wcscmp(op, L"*") == 0)
+        {
             Result->Value *= right.Value;
-            break;
-
-        case L'/':
-        case L'%':
+        }
+        else if ((wcscmp(op, L"/") == 0) || (wcscmp(op, L"%") == 0))
+        {
             if (right.Value == 0)
             {
                 State.Error = L"a division by zero";
@@ -1217,7 +1278,21 @@ ParseLevel (
             }
 
             Result->Value = (op[0] == L'/') ? (Result->Value / right.Value) : (Result->Value % right.Value);
-            break;
+        }
+        else
+        {
+            //
+            // A comparison, which only a condition uses, so it says nothing
+            // about the kind of code.
+            //
+            Result->Value = ((wcscmp(op, L"==") == 0) ? (Result->Value == right.Value)
+                           : (wcscmp(op, L"!=") == 0) ? (Result->Value != right.Value)
+                           : (wcscmp(op, L"<") == 0) ? (Result->Value < right.Value)
+                           : (wcscmp(op, L">") == 0) ? (Result->Value > right.Value)
+                           : (wcscmp(op, L"<=") == 0) ? (Result->Value <= right.Value)
+                           : (Result->Value >= right.Value)) ? 1 : 0;
+            Result->Kind = Hint::None;
+            continue;
         }
 
         Result->Kind = Combine(Result->Kind, right.Kind);
@@ -1227,9 +1302,63 @@ ParseLevel (
 static bool ParseMultiply(Parser& State, Evaluated* Result) { return ParseLevel(State, Result, { L"*", L"/", L"%" }, ParseUnary); }
 static bool ParseAdd(Parser& State, Evaluated* Result) { return ParseLevel(State, Result, { L"+", L"-" }, ParseMultiply); }
 static bool ParseShift(Parser& State, Evaluated* Result) { return ParseLevel(State, Result, { L"<<", L">>" }, ParseAdd); }
-static bool ParseAnd(Parser& State, Evaluated* Result) { return ParseLevel(State, Result, { L"&" }, ParseShift); }
+static bool ParseRelational(Parser& State, Evaluated* Result) { return ParseLevel(State, Result, { L"<", L">", L"<=", L">=" }, ParseShift); }
+static bool ParseEquality(Parser& State, Evaluated* Result) { return ParseLevel(State, Result, { L"==", L"!=" }, ParseRelational); }
+static bool ParseAnd(Parser& State, Evaluated* Result) { return ParseLevel(State, Result, { L"&" }, ParseEquality); }
 static bool ParseXor(Parser& State, Evaluated* Result) { return ParseLevel(State, Result, { L"^" }, ParseAnd); }
 static bool ParseOr(Parser& State, Evaluated* Result) { return ParseLevel(State, Result, { L"|" }, ParseXor); }
+
+
+/*!
+
+    @brief Parses a ?: conditional, or anything lower.
+
+    @details Only when the condition can be worked out, which a run-time
+             variable can't. ReadHeaders has a fallback for the tags that use
+             one.
+
+*/
+static
+bool
+ParseConditional (
+    _Inout_ Parser& State,
+    _Out_ Evaluated* Result
+    )
+{
+    Evaluated whenTrue;
+    Evaluated whenFalse;
+
+    if (!ParseOr(State, Result))
+    {
+        return false;
+    }
+
+    if (!Peek(State, L"?"))
+    {
+        return true;
+    }
+
+    State.Position++;
+    if (!ParseConditional(State, &whenTrue))
+    {
+        return false;
+    }
+
+    if (!Peek(State, L":"))
+    {
+        State.Error = L"a ? with no :";
+        return false;
+    }
+
+    State.Position++;
+    if (!ParseConditional(State, &whenFalse))
+    {
+        return false;
+    }
+
+    *Result = (Result->Value != 0) ? whenTrue : whenFalse;
+    return true;
+}
 
 
 /*!
@@ -1280,7 +1409,7 @@ EvaluateTokens (
     state.Position = 0;
     state.Depth = Depth;
 
-    if (!ParseOr(state, Result))
+    if (!ParseConditional(state, Result))
     {
         *Error = state.Error;
         return false;
@@ -1564,7 +1693,7 @@ CommentText (
 /*!
 
     @brief Reads the #defines and the message compiler's MessageText blocks
-           from one header.
+           from one header, and keeps its other lines for CollectAssignments.
 
     @param[in,out] Context - Where they go.
 
@@ -1688,8 +1817,14 @@ CollectDefines (
         }
 
         rest = Trim(logical);
-        if (rest.empty() || (rest[0] != L'#'))
+        if (rest.empty())
         {
+            continue;
+        }
+
+        if (rest[0] != L'#')
+        {
+            Context.Statements.push_back({ Header, logicalLine, rest, logicalComment });
             continue;
         }
 
@@ -1765,6 +1900,1054 @@ CollectDefines (
 
 /*!
 
+    @brief Finds the bracket that closes one, skipping anything quoted.
+
+    @param[in] Text - The text.
+
+    @param[in] Open - Where the opening bracket is.
+
+    @return Where the closing one is, or npos if it isn't closed.
+
+*/
+static
+size_t
+ClosingBracket (
+    _In_ const std::wstring& Text,
+    _In_ size_t Open
+    )
+{
+    WCHAR quote;
+    int depth;
+
+    quote = 0;
+    depth = 0;
+
+    for (size_t i = Open; i < Text.size(); i++)
+    {
+        if (quote != 0)
+        {
+            if (Text[i] == L'\\')
+            {
+                i++;
+            }
+            else if (Text[i] == quote)
+            {
+                quote = 0;
+            }
+            continue;
+        }
+
+        if ((Text[i] == L'\'') || (Text[i] == L'"'))
+        {
+            quote = Text[i];
+        }
+        else if (Text[i] == L'(')
+        {
+            depth++;
+        }
+        else if ((Text[i] == L')') && (--depth == 0))
+        {
+            return i;
+        }
+    }
+
+    return std::wstring::npos;
+}
+
+
+/*!
+
+    @brief Splits a macro call's arguments at their top-level commas.
+
+    @param[in] Text - What's between the call's brackets.
+
+    @return The arguments, trimmed. None for an empty call.
+
+*/
+static
+std::vector<std::wstring>
+SplitArguments (
+    _In_ const std::wstring& Text
+    )
+{
+    std::vector<std::wstring> arguments;
+    std::wstring current;
+    WCHAR quote;
+    int depth;
+
+    if (Trim(Text).empty())
+    {
+        return arguments;
+    }
+
+    quote = 0;
+    depth = 0;
+
+    for (size_t i = 0; i < Text.size(); i++)
+    {
+        if (quote != 0)
+        {
+            current += Text[i];
+            if ((Text[i] == L'\\') && ((i + 1) < Text.size()))
+            {
+                current += Text[++i];
+            }
+            else if (Text[i] == quote)
+            {
+                quote = 0;
+            }
+            continue;
+        }
+
+        if ((Text[i] == L',') && (depth == 0))
+        {
+            arguments.push_back(Trim(current));
+            current.clear();
+            continue;
+        }
+
+        if ((Text[i] == L'\'') || (Text[i] == L'"'))
+        {
+            quote = Text[i];
+        }
+        else if (Text[i] == L'(')
+        {
+            depth++;
+        }
+        else if (Text[i] == L')')
+        {
+            depth--;
+        }
+
+        current += Text[i];
+    }
+
+    arguments.push_back(Trim(current));
+    return arguments;
+}
+
+
+/*!
+
+    @brief Expands a call to one of the headers' function-like macros, as
+           text.
+
+    @details Each parameter is replaced by its argument as written. That's all
+             a macro like #define POOLTAG_DEF(Name, Value) Name = Value needs,
+             and the result is then read like any other line.
+
+    @param[in] Context - The headers.
+
+    @param[in] Text - The text, which must be the whole call.
+
+    @param[out] Expanded - Receives the expansion.
+
+    @return True if the text is a call to one of the headers' macros with the
+            right number of arguments.
+
+*/
+static
+bool
+ExpandCall (
+    _In_ const HeaderContext& Context,
+    _In_ const std::wstring& Text,
+    _Out_ std::wstring* Expanded
+    )
+{
+    std::unordered_map<std::wstring, size_t>::const_iterator found;
+    std::vector<std::wstring> arguments;
+    std::wstring identifier;
+    const Define* define;
+    size_t open;
+    size_t close;
+    size_t end;
+    WCHAR quote;
+    bool replaced;
+
+    Expanded->clear();
+
+    for (open = 0; (open < Text.size()) && IsIdentifierChar(Text[open]); open++)
+    {
+    }
+
+    if ((open == 0) || iswdigit(Text[0]))
+    {
+        return false;
+    }
+
+    found = Context.ByName.find(Text.substr(0, open));
+    if ((found == Context.ByName.end()) || !Context.Defines[found->second].FunctionLike)
+    {
+        return false;
+    }
+
+    define = &Context.Defines[found->second];
+
+    while ((open < Text.size()) && iswspace(Text[open]))
+    {
+        open++;
+    }
+
+    if ((open >= Text.size()) || (Text[open] != L'('))
+    {
+        return false;
+    }
+
+    close = ClosingBracket(Text, open);
+    if ((close == std::wstring::npos) || !Trim(Text.substr(close + 1)).empty())
+    {
+        return false;
+    }
+
+    arguments = SplitArguments(Text.substr(open + 1, close - open - 1));
+    if (arguments.size() != define->Parameters.size())
+    {
+        return false;
+    }
+
+    quote = 0;
+
+    for (size_t i = 0; i < define->Body.size(); i = end)
+    {
+        end = i + 1;
+
+        if (quote != 0)
+        {
+            Expanded->push_back(define->Body[i]);
+            if ((define->Body[i] == L'\\') && (end < define->Body.size()))
+            {
+                Expanded->push_back(define->Body[end++]);
+            }
+            else if (define->Body[i] == quote)
+            {
+                quote = 0;
+            }
+            continue;
+        }
+
+        if ((define->Body[i] == L'\'') || (define->Body[i] == L'"'))
+        {
+            quote = define->Body[i];
+            Expanded->push_back(define->Body[i]);
+            continue;
+        }
+
+        if (!IsIdentifierChar(define->Body[i]))
+        {
+            Expanded->push_back(define->Body[i]);
+            continue;
+        }
+
+        while ((end < define->Body.size()) && IsIdentifierChar(define->Body[end]))
+        {
+            end++;
+        }
+
+        identifier = define->Body.substr(i, end - i);
+        replaced = false;
+
+        for (size_t p = 0; p < define->Parameters.size(); p++)
+        {
+            if (identifier == define->Parameters[p])
+            {
+                Expanded->append(arguments[p]);
+                replaced = true;
+                break;
+            }
+        }
+
+        if (!replaced)
+        {
+            Expanded->append(identifier);
+        }
+    }
+
+    return true;
+}
+
+
+/*!
+
+    @brief Whether text holds a word, as a whole identifier.
+
+*/
+static
+bool
+HasWord (
+    _In_ const std::wstring& Text,
+    _In_z_ PCWSTR Word
+    )
+{
+    size_t length;
+    size_t at;
+
+    length = wcslen(Word);
+
+    for (at = Text.find(Word); at != std::wstring::npos; at = Text.find(Word, at + 1))
+    {
+        if (((at == 0) || !IsIdentifierChar(Text[at - 1])) &&
+            (((at + length) >= Text.size()) || !IsIdentifierChar(Text[at + length])))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+/*!
+
+    @brief Where a lone =, an assignment rather than part of ==, <= and the
+           like, is in some text.
+
+    @return Its position, or npos if there isn't one.
+
+*/
+static
+size_t
+FindAssignment (
+    _In_ const std::wstring& Text
+    )
+{
+    WCHAR quote;
+
+    quote = 0;
+
+    for (size_t i = 0; i < Text.size(); i++)
+    {
+        if (quote != 0)
+        {
+            if (Text[i] == L'\\')
+            {
+                i++;
+            }
+            else if (Text[i] == quote)
+            {
+                quote = 0;
+            }
+            continue;
+        }
+
+        if ((Text[i] == L'\'') || (Text[i] == L'"'))
+        {
+            quote = Text[i];
+            continue;
+        }
+
+        if ((Text[i] == L'=') &&
+            ((i == 0) || (wcschr(L"=!<>", Text[i - 1]) == nullptr)) &&
+            (((i + 1) >= Text.size()) || (Text[i + 1] != L'=')))
+        {
+            return i;
+        }
+    }
+
+    return std::wstring::npos;
+}
+
+
+/*!
+
+    @brief Whether text is a plain identifier, like a name being defined.
+
+*/
+static
+bool
+IsIdentifier (
+    _In_ const std::wstring& Text
+    )
+{
+    return !Text.empty() &&
+           !iswdigit(Text[0]) &&
+           (std::find_if(Text.begin(), Text.end(), [](WCHAR C) { return !IsIdentifierChar(C); }) == Text.end());
+}
+
+
+/*!
+
+    @brief Reads a call to a macro none of the headers define as Name = Value,
+           when it's shaped like one.
+
+    @details A header of POOLTAG_DEF(MY_TAG, 'gaTM') lines often gets the macro
+             from a shared header that's never been added. Two arguments with
+             a name first is how nearly all of these are written, so that's
+             what we go by. Anything longer we can't guess, but if it holds a
+             tag it's listed as skipped, so the header doesn't just read as 0.
+
+    @param[in] Context - The headers, whose results a skip is added to.
+
+    @param[in] From - The line it's on.
+
+    @param[in] Text - The text, which must be the whole call.
+
+    @param[out] Guessed - Receives Name = Value.
+
+    @return True if it was read as Name = Value.
+
+*/
+static
+bool
+GuessCall (
+    _In_ const HeaderContext& Context,
+    _In_ const Statement& From,
+    _In_ const std::wstring& Text,
+    _Out_ std::wstring* Guessed
+    )
+{
+    std::vector<std::wstring> arguments;
+    std::wstring macro;
+    size_t open;
+    size_t close;
+
+    Guessed->clear();
+
+    open = Text.find(L'(');
+    if (open == std::wstring::npos)
+    {
+        return false;
+    }
+
+    macro = Trim(Text.substr(0, open));
+    if (!IsIdentifier(macro) || (Context.ByName.find(macro) != Context.ByName.end()))
+    {
+        return false;
+    }
+
+    close = ClosingBracket(Text, open);
+    if ((close == std::wstring::npos) || !Trim(Text.substr(close + 1)).empty())
+    {
+        return false;
+    }
+
+    arguments = SplitArguments(Text.substr(open + 1, close - open - 1));
+    if ((arguments.size() < 2) || !IsIdentifier(arguments[0]))
+    {
+        return false;
+    }
+
+    if (arguments.size() == 2)
+    {
+        *Guessed = arguments[0] + L" = " + arguments[1];
+        return true;
+    }
+
+    if (std::find_if(arguments.begin(), arguments.end(), [](const std::wstring& A) { return !A.empty() && (A[0] == L'\''); }) != arguments.end())
+    {
+        (*Context.Results)[From.Header].Skipped.push_back(
+            { From.Line, arguments[0], macro + L" isn't defined in any header WinCode reads" });
+    }
+
+    return false;
+}
+
+
+/*!
+
+    @brief Reads one enum member, constant or macro call as a definition, if
+           it is one.
+
+    @details Only an enum's members, const and constexpr constants, and what
+             one of the headers' macros expands to count. That keeps an
+             assignment in an inline function, which a header can hold, from
+             ever looking like a code. A call to a macro we don't have is
+             guessed at, but not inside a function, where it's just a call.
+
+    @param[in,out] Context - The headers, which the definition is added to.
+
+    @param[in] From - The line it's on.
+
+    @param[in] Text - The member, constant or call.
+
+    @param[in] Scope - What it's inside of.
+
+*/
+static
+void
+AddAssignment (
+    _Inout_ HeaderContext& Context,
+    _In_ const Statement& From,
+    _In_ const std::wstring& Text,
+    _In_ StatementScope Scope
+    )
+{
+    std::vector<std::wstring> words;
+    std::wstring text;
+    std::wstring expanded;
+    std::wstring left;
+    std::wstring right;
+    Define define;
+    size_t equals;
+    size_t start;
+    bool fromMacro;
+    bool constant;
+
+    text = Trim(Text);
+    fromMacro = false;
+
+    for (int depth = 0; (depth < k_MaxDepth) && ExpandCall(Context, text, &expanded); depth++)
+    {
+        text = Trim(expanded);
+        fromMacro = true;
+
+        //
+        // A macro can bring its own separator, as in Name = Value,
+        //
+        while (!text.empty() && ((text.back() == L',') || (text.back() == L';')))
+        {
+            text = Trim(text.substr(0, text.size() - 1));
+        }
+    }
+
+    if (!fromMacro && (Scope != StatementScope::Other) && GuessCall(Context, From, text, &expanded))
+    {
+        text = expanded;
+        fromMacro = true;
+    }
+
+    equals = FindAssignment(text);
+    if (equals == std::wstring::npos)
+    {
+        return;
+    }
+
+    left = Trim(text.substr(0, equals));
+    right = Trim(text.substr(equals + 1));
+
+    if (right.empty() || (right.find_first_of(L"{}\"") != std::wstring::npos))
+    {
+        return;
+    }
+
+    constant = false;
+
+    for (start = 0; start < left.size();)
+    {
+        while ((start < left.size()) && iswspace(left[start]))
+        {
+            start++;
+        }
+
+        if (start >= left.size())
+        {
+            break;
+        }
+
+        if (!IsIdentifierChar(left[start]) || iswdigit(left[start]))
+        {
+            return;
+        }
+
+        words.push_back(std::wstring());
+        while ((start < left.size()) && IsIdentifierChar(left[start]))
+        {
+            words.back() += left[start++];
+        }
+
+        constant = constant || (words.back() == L"const") || (words.back() == L"constexpr");
+    }
+
+    if (words.empty() || !(fromMacro || constant || ((Scope == StatementScope::Enum) && (words.size() == 1))))
+    {
+        return;
+    }
+
+    define.Header = From.Header;
+    define.Line = From.Line;
+    define.Name = words.back();
+    define.FunctionLike = false;
+    define.Body = right;
+    define.Comment = From.Comment;
+
+    if (Context.ByName.find(define.Name) == Context.ByName.end())
+    {
+        Context.ByName.emplace(define.Name, Context.Defines.size());
+    }
+
+    Context.Defines.push_back(define);
+}
+
+
+/*!
+
+    @brief Finds the definitions written as enum members, constants or calls to
+           the headers' own macros, like POOLTAG_DEF(MY_TAG, 'gaTM'), and adds
+           them as if each were a #define.
+
+    @details Done once every #define is known, since a macro can be defined
+             after it's used, or in another header. Line by line, as these are
+             nearly always written one to a line, with the braces followed
+             across lines to know when we're in an enum.
+
+    @param[in,out] Context - The headers.
+
+*/
+static
+void
+CollectAssignments (
+    _Inout_ HeaderContext& Context
+    )
+{
+    std::vector<StatementScope> braces;
+    std::wstring pending;
+    std::wstring piece;
+    StatementScope scope;
+    size_t header;
+    WCHAR quote;
+    WCHAR c;
+    int depth;
+
+    header = SIZE_MAX;
+
+    //
+    // Inside a function or a struct anywhere up the braces is Other, however
+    // deep, so a call there is never guessed at.
+    //
+    auto CurrentScope = [&braces]() -> StatementScope
+    {
+        if (std::find(braces.begin(), braces.end(), StatementScope::Other) != braces.end())
+        {
+            return StatementScope::Other;
+        }
+
+        return braces.empty() ? StatementScope::File : braces.back();
+    };
+
+    for (const Statement& statement : Context.Statements)
+    {
+        if (statement.Header != header)
+        {
+            braces.clear();
+            pending.clear();
+            header = statement.Header;
+        }
+
+        piece.clear();
+        quote = 0;
+        depth = 0;
+
+        for (size_t i = 0; i < statement.Code.size(); i++)
+        {
+            c = statement.Code[i];
+
+            if (quote != 0)
+            {
+                piece += c;
+                if ((c == L'\\') && ((i + 1) < statement.Code.size()))
+                {
+                    piece += statement.Code[++i];
+                }
+                else if (c == quote)
+                {
+                    quote = 0;
+                }
+                continue;
+            }
+
+            if ((c == L'\'') || (c == L'"'))
+            {
+                quote = c;
+            }
+            else if (c == L'(')
+            {
+                depth++;
+            }
+            else if ((c == L')') && (depth > 0))
+            {
+                depth--;
+            }
+            else if ((depth == 0) && (wcschr(L",;{}", c) != nullptr))
+            {
+                AddAssignment(Context, statement, piece, CurrentScope());
+                pending += piece;
+                piece.clear();
+
+                //
+                // Each brace remembers whether it opened an enum, or just an
+                // extern "C" or a namespace, so we know when we're back out.
+                //
+                if (c == L'{')
+                {
+                    if (HasWord(pending, L"enum"))
+                    {
+                        scope = StatementScope::Enum;
+                    }
+                    else if (HasWord(pending, L"extern") || HasWord(pending, L"namespace"))
+                    {
+                        scope = StatementScope::File;
+                    }
+                    else
+                    {
+                        scope = StatementScope::Other;
+                    }
+
+                    braces.push_back(scope);
+                    pending.clear();
+                }
+                else if (c == L'}')
+                {
+                    if (!braces.empty())
+                    {
+                        braces.pop_back();
+                    }
+                    pending.clear();
+                }
+                else if (c == L';')
+                {
+                    pending.clear();
+                }
+                continue;
+            }
+
+            piece += c;
+        }
+
+        AddAssignment(Context, statement, piece, CurrentScope());
+        pending += piece + L" ";
+    }
+}
+
+
+/*!
+
+    @brief Whether a line of a tag list is a comment, as pooltag.txt writes
+           them.
+
+*/
+static
+bool
+IsListComment (
+    _In_ const std::wstring& Line
+    )
+{
+    std::wstring text;
+
+    text = Trim(Line);
+
+    return text.empty() ||
+           (text.rfind(L"//", 0) == 0) ||
+           (text[0] == L';') ||
+           (text[0] == L'#') ||
+           ((_wcsnicmp(text.c_str(), L"rem", 3) == 0) && ((text.size() == 3) || iswspace(text[3])));
+}
+
+
+/*!
+
+    @brief Reads one line of a pool tag list, in pooltag.txt's format.
+
+    @details As in "MmSt - nt!mm - Mm section object prototype ptes". The tag
+             can have spaces in it, like "Dh 0", and pooltag.txt pads a short
+             one with them.
+
+    @param[in] Line - The line.
+
+    @param[out] Tag - Receives the tag, without trailing spaces.
+
+    @param[out] Text - Receives what it's for, as the debugger's list puts it,
+                       "binary: description".
+
+    @return True if the line is a tag's.
+
+*/
+static
+bool
+ReadTagLine (
+    _In_ const std::wstring& Line,
+    _Out_ std::wstring* Tag,
+    _Out_ std::wstring* Text
+    )
+{
+    std::wstring binary;
+    std::wstring description;
+    std::wstring rest;
+    size_t dash;
+
+    Tag->clear();
+    Text->clear();
+
+    dash = Line.find(L" - ");
+    if ((dash == 0) || (dash == std::wstring::npos) || (dash > 5))
+    {
+        return false;
+    }
+
+    *Tag = Line.substr(0, dash);
+    while (!Tag->empty() && iswspace(Tag->back()))
+    {
+        Tag->pop_back();
+    }
+
+    if (Tag->empty() || (Tag->size() > 4) || ((*Tag)[0] == L' ') ||
+        (std::find_if(Tag->begin(), Tag->end(), [](WCHAR C) { return (C < 0x20) || (C > 0x7E); }) != Tag->end()))
+    {
+        return false;
+    }
+
+    rest = Line.substr(dash + 3);
+    dash = rest.find(L" - ");
+    binary = Trim(rest.substr(0, dash));
+    description = (dash == std::wstring::npos) ? std::wstring() : Trim(rest.substr(dash + 3));
+
+    if ((binary == L"<unknown>") || binary.empty())
+    {
+        *Text = description;
+    }
+    else
+    {
+        *Text = description.empty() ? binary : (binary + L": " + description);
+    }
+
+    return true;
+}
+
+
+/*!
+
+    @brief Whether text is a pool tag list, nearly every line a tag in
+           pooltag.txt's format.
+
+*/
+static
+bool
+IsTagList (
+    _In_ const std::wstring& Text
+    )
+{
+    std::wstring line;
+    std::wstring tag;
+    std::wstring text;
+    size_t lines;
+    size_t tags;
+    size_t start;
+    size_t end;
+
+    if (Text.find(L"#define") != std::wstring::npos)
+    {
+        return false;
+    }
+
+    lines = 0;
+    tags = 0;
+
+    for (start = 0; start < Text.size(); start = end + 1)
+    {
+        end = Text.find(L'\n', start);
+        if (end == std::wstring::npos)
+        {
+            end = Text.size();
+        }
+
+        line = Text.substr(start, end - start);
+        if (IsListComment(line))
+        {
+            continue;
+        }
+
+        lines++;
+        tags += ReadTagLine(line, &tag, &text) ? 1 : 0;
+    }
+
+    //
+    // A stray line or two, like a heading, doesn't stop it being a list.
+    //
+    return (tags > 0) && ((tags * 5) >= (lines * 4));
+}
+
+
+/*!
+
+    @brief Reads a pool tag list's tags, which are codes as they stand.
+
+    @param[in,out] Context - Where they go.
+
+    @param[in] Header - The file's index.
+
+    @param[in] Text - The list.
+
+*/
+static
+void
+CollectTagList (
+    _Inout_ HeaderContext& Context,
+    _In_ size_t Header,
+    _In_ const std::wstring& Text
+    )
+{
+    HeaderRead& result = (*Context.Results)[Header];
+    std::wstring line;
+    std::wstring tag;
+    std::wstring text;
+    HeaderCode code;
+    size_t start;
+    size_t end;
+    uint32_t lineNumber;
+
+    lineNumber = 0;
+
+    for (start = 0; start <= Text.size(); start = end + 1)
+    {
+        end = Text.find(L'\n', start);
+        if (end == std::wstring::npos)
+        {
+            end = Text.size();
+        }
+
+        line = Text.substr(start, end - start);
+        if (!line.empty() && (line.back() == L'\r'))
+        {
+            line.pop_back();
+        }
+
+        lineNumber++;
+
+        if (IsListComment(line))
+        {
+            continue;
+        }
+
+        if (!ReadTagLine(line, &tag, &text))
+        {
+            result.Skipped.push_back({ lineNumber, Trim(line).substr(0, 4), L"isn't a line of Tag - binary - description" });
+            continue;
+        }
+
+        code = HeaderCode();
+        code.Kind = CodeKind::PoolTag;
+        code.Name = tag;
+        code.Tag = tag;
+        code.Text = text;
+        code.Line = lineNumber;
+
+        //
+        // Its bytes as they sit in memory, padded with spaces, which is how
+        // a debugger shows a short one.
+        //
+        code.Value = 0;
+        for (size_t i = 0; i < 4; i++)
+        {
+            code.Value |= SCAST(uint32_t)((i < tag.size()) ? (tag[i] & 0xFF) : L' ') << (8 * i);
+        }
+
+        result.Codes.push_back(code);
+    }
+}
+
+
+/*!
+
+    @brief Whether text is a C or C++ header, which anything can be read as.
+
+*/
+static
+bool
+IsAnyText (
+    _In_ const std::wstring& Text
+    )
+{
+    UNREFERENCED_PARAMETER(Text);
+    return true;
+}
+
+
+/*!
+
+    @brief A format your codes can be written in.
+
+*/
+struct CodeFileFormat
+{
+    PCWSTR Name;
+
+    //
+    // The endings the codes folder picks it up by, up to three.
+    //
+    PCWSTR Extensions[3];
+
+    bool (*Recognise)(const std::wstring& Text);
+    void (*Collect)(HeaderContext& Context, size_t Header, const std::wstring& Text);
+};
+
+//
+// Each file's read as the first format that recognises it, so a header, which
+// takes anything, comes last. A new format is a new row.
+//
+static const CodeFileFormat k_Formats[] =
+{
+    { L"pool tag list", { L".txt", nullptr, nullptr }, IsTagList, CollectTagList },
+    { L"C/C++ header", { L".h", L".hpp", nullptr }, IsAnyText, CollectDefines },
+};
+
+
+/*!
+
+    @brief Whether the codes folder reads a file, by its name.
+
+    @param[in] Name - The file's name.
+
+    @return True if it ends in one of the formats' extensions.
+
+*/
+bool
+IsUserCodeFileName (
+    _In_ const std::wstring& Name
+    )
+{
+    size_t length;
+
+    for (const CodeFileFormat& format : k_Formats)
+    {
+        for (PCWSTR extension : format.Extensions)
+        {
+            if (extension == nullptr)
+            {
+                continue;
+            }
+
+            length = wcslen(extension);
+            if ((Name.size() > length) && (_wcsicmp(Name.c_str() + Name.size() - length, extension) == 0))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+
+/*!
+
+    @brief The files the codes folder reads, for a file dialog's filter.
+
+    @return As in L"*.txt;*.h;*.hpp".
+
+*/
+std::wstring
+UserCodeFilePatterns (
+    void
+    )
+{
+    std::wstring patterns;
+
+    for (const CodeFileFormat& format : k_Formats)
+    {
+        for (PCWSTR extension : format.Extensions)
+        {
+            if (extension != nullptr)
+            {
+                patterns += patterns.empty() ? L"*" : L";*";
+                patterns += extension;
+            }
+        }
+    }
+
+    return patterns;
+}
+
+
+/*!
+
     @brief Whether a name's a building block codes are made from rather than
            a code, like a severity, a facility or a range marker.
 
@@ -1815,6 +2998,8 @@ LooksLikeCode (
     static constexpr PCWSTR k_Infixes[] = { L"_E_", L"_S_", L"_STATUS_", L"_ERROR_" };
     static constexpr PCWSTR k_Makers[] = { L"(NTSTATUS)", L"(HRESULT)", L"(SCODE)", L"_HRESULT_TYPEDEF_", L"MAKE_HRESULT", L"MAKE_SCODE", L"CTL_CODE" };
 
+    std::wstring upper;
+
     //
     // Strings and sizes are never codes, whatever they're called, as with
     // ntdef.h's ERROR_LOG_MESSAGE_LIMIT_SIZE.
@@ -1846,6 +3031,21 @@ LooksLikeCode (
         {
             return true;
         }
+    }
+
+    //
+    // Pool tags are named for what they are, MY_TAG, RX_FCB_POOLTAG or
+    // k_PoolTag.
+    //
+    upper = Definition.Name;
+    for (WCHAR& c : upper)
+    {
+        c = SCAST(WCHAR)(towupper(c));
+    }
+
+    if (upper.find(L"TAG") != std::wstring::npos)
+    {
+        return true;
     }
 
     return (TreatAs != UserTreatAs::Automatic) &&
@@ -1893,9 +3093,92 @@ PoolTagText (
 
 /*!
 
+    @brief The one pool tag a definition passes, for a definition that can't
+           be worked out.
+
+    @details As in rxpooltg.h's RX_DEFINE_POOLTAG('mTxR', RX_MISC_POOLTAG),
+             which picks between its own tag and a shared one with a variable
+             only known at run time. Its own is what the name stands for.
+
+    @param[in] Definition - The definition.
+
+    @param[out] Result - Receives the tag.
+
+    @return True if exactly one four-character constant is written in it.
+
+*/
+static
+bool
+LoneTag (
+    _In_ const Define& Definition,
+    _Out_ Evaluated* Result
+    )
+{
+    std::vector<Token> tokens;
+    std::wstring error;
+    size_t count;
+
+    *Result = { 0, Hint::None };
+
+    if (!Tokenize(Definition.Body, &tokens, &error))
+    {
+        return false;
+    }
+
+    count = 0;
+    for (const Token& token : tokens)
+    {
+        if ((token.Kind == TokenKind::Character) && (token.Text.size() == 6) && (token.Text.find(L'\\') == std::wstring::npos))
+        {
+            *Result = { token.Value, Hint::PoolTag };
+            count++;
+        }
+    }
+
+    return count == 1;
+}
+
+
+/*!
+
+    @brief The kind a Treat as setting gives a header's plain numbers.
+
+*/
+static
+Hint
+TreatAsHint (
+    _In_ UserTreatAs TreatAs
+    )
+{
+    switch (TreatAs)
+    {
+    case UserTreatAs::NtStatus:
+        return Hint::NtStatus;
+
+    case UserTreatAs::HResult:
+        return Hint::HResult;
+
+    case UserTreatAs::WinError:
+        return Hint::WinError;
+
+    case UserTreatAs::PoolTag:
+        return Hint::PoolTag;
+
+    case UserTreatAs::Ioctl:
+        return Hint::Ioctl;
+
+    default:
+        return Hint::None;
+    }
+}
+
+
+/*!
+
     @brief Reads headers for the codes they define, without a compiler.
 
-    @details They're read together, so one can use names another defines.
+    @details They're read together, so one can use names another defines. Each
+             is read as the first format in k_Formats that recognises it.
 
     @param[in] Headers - The headers.
 
@@ -1915,13 +3198,25 @@ ReadHeaders (
     std::wstring error;
     UserTreatAs treatAs;
     Hint kind;
+    bool fromTreatAs;
 
     results.resize(Headers.size());
+    context.Results = &results;
 
     for (size_t i = 0; i < Headers.size(); i++)
     {
-        CollectDefines(context, i, Headers[i].Text);
+        for (const CodeFileFormat& format : k_Formats)
+        {
+            if (format.Recognise(Headers[i].Text))
+            {
+                results[i].Format = format.Name;
+                format.Collect(context, i, Headers[i].Text);
+                break;
+            }
+        }
     }
+
+    CollectAssignments(context);
 
     for (size_t i = 0; i < context.Defines.size(); i++)
     {
@@ -1940,7 +3235,7 @@ ReadHeaders (
 
         treatAs = Headers[define.Header].TreatAs;
 
-        if (!ResolveName(context, define.Name, 0, &value, &error))
+        if (!ResolveName(context, define.Name, 0, &value, &error) && !LoneTag(define, &value))
         {
             //
             // Failing on a size or a string, even one a name it uses holds,
@@ -1967,11 +3262,11 @@ ReadHeaders (
         // Treat as says what the header's plain numbers are, and so overrides
         // the guess that an L-suffixed number is a Win32 error.
         //
+        fromTreatAs = false;
         if (((kind == Hint::None) || (kind == Hint::WinError)) && (treatAs != UserTreatAs::Automatic))
         {
-            kind = (treatAs == UserTreatAs::NtStatus) ? Hint::NtStatus
-                 : (treatAs == UserTreatAs::HResult) ? Hint::HResult
-                 : Hint::WinError;
+            kind = TreatAsHint(treatAs);
+            fromTreatAs = true;
         }
 
         if (kind == Hint::None)
@@ -2008,7 +3303,14 @@ ReadHeaders (
             if (code.Tag.empty() ||
                 (std::find_if(code.Tag.begin(), code.Tag.end(), [](WCHAR C) { return (C < 0x20) || (C > 0x7E); }) != code.Tag.end()))
             {
-                results[define.Header].Skipped.push_back({ define.Line, define.Name, L"a pool tag that isn't printable" });
+                //
+                // A header treated as tags still has its sizes and counts,
+                // which were never tags.
+                //
+                if (!fromTreatAs)
+                {
+                    results[define.Header].Skipped.push_back({ define.Line, define.Name, L"a pool tag that isn't printable" });
+                }
                 continue;
             }
             break;

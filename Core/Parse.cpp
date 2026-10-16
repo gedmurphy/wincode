@@ -37,6 +37,8 @@
 
 #include "WinCode.hpp"
 
+#include <cwctype>
+
 
 //
 // Characters that separate tokens. Labels such as "HRESULT:" and "Status=" fall
@@ -370,6 +372,24 @@ ParseToken (
 
 /*!
 
+    @brief A token, and where it was in the query.
+
+*/
+struct QueryToken
+{
+    std::wstring Text;
+
+    //
+    // Offsets into the query, from the token's first character to just past
+    // its last, before trailing punctuation was taken off.
+    //
+    size_t Start;
+    size_t End;
+};
+
+
+/*!
+
     @brief Splits a query into tokens.
 
     @param[in] Query - The query.
@@ -378,18 +398,26 @@ ParseToken (
 
 */
 static
-std::vector<std::wstring>
+std::vector<QueryToken>
 SplitTokens (
     _In_z_ PCWSTR Query
     )
 {
-    std::vector<std::wstring> tokens;
+    std::vector<QueryToken> tokens;
     std::wstring current;
+    size_t start;
+
+    start = 0;
 
     for (PCWSTR c = Query; ; c++)
     {
         if ((*c != L'\0') && (wcschr(k_Separators, *c) == nullptr))
         {
+            if (current.empty())
+            {
+                start = SCAST(size_t)(c - Query);
+            }
+
             current += *c;
             continue;
         }
@@ -401,7 +429,7 @@ SplitTokens (
 
         if (!current.empty())
         {
-            tokens.push_back(current);
+            tokens.push_back({ current, start, SCAST(size_t)(c - Query) });
             current.clear();
         }
 
@@ -412,6 +440,202 @@ SplitTokens (
     }
 
     return tokens;
+}
+
+
+/*!
+
+    @brief Whether text could be a pool tag.
+
+    @param[in] Text - The text, without trailing spaces.
+
+    @return True if it's one to four printable characters, starting with
+            something other than a space, with a letter or digit in it. A tag
+            of digits alone needs all four, so "tag 5" stays a number.
+
+*/
+static
+bool
+IsTagText (
+    _In_ const std::wstring& Text
+    )
+{
+    bool hasLetter;
+    bool hasDigit;
+
+    if (Text.empty() || (Text.size() > 4) || (Text[0] == L' '))
+    {
+        return false;
+    }
+
+    hasLetter = false;
+    hasDigit = false;
+
+    for (WCHAR c : Text)
+    {
+        if ((c < 0x20) || (c > 0x7E) || (c == L'\'') || (c == L'"'))
+        {
+            return false;
+        }
+
+        if (((c >= L'A') && (c <= L'Z')) || ((c >= L'a') && (c <= L'z')))
+        {
+            hasLetter = true;
+        }
+        else if (IsDecimalDigit(c))
+        {
+            hasDigit = true;
+        }
+    }
+
+    return hasLetter || (hasDigit && (Text.size() == 4));
+}
+
+
+/*!
+
+    @brief Whether a token says a pool tag comes next.
+
+    @details As in "Pool tag: Ntfx", "Pooltag MmSt" from !pool, "!poolfind
+             MmSt", or "(Allocated) *MmSt", where !pool puts the tag after the
+             block's state.
+
+    @param[in] Query - The query.
+
+    @param[in] Token - The token.
+
+    @return True if the token is one of those labels.
+
+*/
+static
+bool
+IsTagLabel (
+    _In_z_ PCWSTR Query,
+    _In_ const QueryToken& Token
+    )
+{
+    PCWSTR text;
+    bool bracketed;
+
+    text = Token.Text.c_str();
+    if (text[0] == L'!')
+    {
+        text++;
+    }
+
+    if ((_wcsicmp(text, L"tag") == 0) ||
+        (_wcsicmp(text, L"pooltag") == 0) ||
+        (_wcsicmp(text, L"poolfind") == 0))
+    {
+        return true;
+    }
+
+    bracketed = (Token.Start > 0) && (Query[Token.Start - 1] == L'(') && (Query[Token.End] == L')');
+
+    return bracketed && ((_wcsicmp(text, L"Allocated") == 0) || (_wcsicmp(text, L"Free") == 0));
+}
+
+
+/*!
+
+    @brief Reads the pool tag after a label.
+
+    @details We read the query itself rather than its tokens, which would split
+             or trim a tag with punctuation in it, like Lr!! or Gh?:.
+
+    @param[in] Query - The query.
+
+    @param[in] From - Where the label ends.
+
+    @param[out] Tag - Receives the tag, without trailing spaces.
+
+    @param[in,out] End - Receives where the tag ends, so the tokens it covers
+                         are skipped. Left alone if no tag follows.
+
+    @return True if a tag follows.
+
+*/
+static
+bool
+ReadMarkedTag (
+    _In_z_ PCWSTR Query,
+    _In_ size_t From,
+    _Out_ std::wstring* Tag,
+    _Inout_ size_t* End
+    )
+{
+    size_t pos;
+    size_t start;
+    size_t end;
+    WCHAR quote;
+
+    Tag->clear();
+
+    pos = From;
+    while ((Query[pos] != L'\0') && (wcschr(L" \t):=*", Query[pos]) != nullptr))
+    {
+        pos++;
+    }
+
+    //
+    // In quotes, a tag can end in spaces, like 'Irp '.
+    //
+    if ((Query[pos] == L'\'') || (Query[pos] == L'"'))
+    {
+        quote = Query[pos];
+        start = ++pos;
+
+        while ((Query[pos] != L'\0') && (Query[pos] != quote) && ((pos - start) <= 4))
+        {
+            pos++;
+        }
+
+        if (Query[pos] != quote)
+        {
+            return false;
+        }
+
+        Tag->assign(Query + start, pos - start);
+        end = pos + 1;
+    }
+    else
+    {
+        start = pos;
+        while ((Query[pos] != L'\0') && !iswspace(Query[pos]))
+        {
+            pos++;
+        }
+
+        Tag->assign(Query + start, pos - start);
+        end = pos;
+
+        //
+        // Punctuation after a tag in a sentence, but only past four characters,
+        // since a tag like DCa. can end in a full stop.
+        //
+        while ((Tag->size() > 4) && (wcschr(L",;.)]", Tag->back()) != nullptr))
+        {
+            Tag->pop_back();
+        }
+
+        if (!Tag->empty() && (Tag->back() == L','))
+        {
+            Tag->pop_back();
+        }
+    }
+
+    while (!Tag->empty() && (Tag->back() == L' '))
+    {
+        Tag->pop_back();
+    }
+
+    if (!IsTagText(*Tag))
+    {
+        return false;
+    }
+
+    *End = end;
+    return true;
 }
 
 
@@ -468,6 +692,34 @@ IsNameToken (
 
 /*!
 
+    @brief Adds a name to search for, unless it's there already.
+
+    @param[in,out] Names - The names so far.
+
+    @param[in] Name - The name.
+
+*/
+static
+void
+AddName (
+    _Inout_ std::vector<std::wstring>& Names,
+    _In_ const std::wstring& Name
+    )
+{
+    for (const std::wstring& name : Names)
+    {
+        if (_wcsicmp(name.c_str(), Name.c_str()) == 0)
+        {
+            return;
+        }
+    }
+
+    Names.push_back(Name);
+}
+
+
+/*!
+
     @brief Finds every number and name in a query.
 
     @details Typed, or pasted from a log or debugger, so a number can come with
@@ -479,6 +731,10 @@ IsNameToken (
              the whole query. That keeps a pasted log line's ordinary words out
              of the search.
 
+             Pool tags have no underscores, and plenty are words, like File and
+             Pool, so inside longer text a tag only counts after a label that
+             says it's one.
+
     @param[in] Query - The text to search.
 
     @return The numbers and names found, either of which may be empty.
@@ -489,40 +745,65 @@ ParseQuery (
     _In_z_ PCWSTR Query
     )
 {
-    std::vector<std::wstring> tokens;
+    std::vector<QueryToken> tokens;
     std::vector<ParsedNumber> readings;
     ParsedQuery parsed;
+    std::wstring tag;
+    std::wstring trimmed;
     size_t before;
+    size_t tagEnd;
     bool alone;
     bool seen;
 
     tokens = SplitTokens(Query);
     alone = (tokens.size() == 1);
+    tagEnd = 0;
 
-    for (const std::wstring& token : tokens)
+    for (const QueryToken& token : tokens)
     {
-        before = readings.size();
-        ParseToken(token, alone, readings);
-
-        if ((readings.size() != before) || !IsNameToken(token, alone))
+        //
+        // Part of a tag we've already read.
+        //
+        if (token.Start < tagEnd)
         {
             continue;
         }
 
-        seen = false;
-        for (const std::wstring& name : parsed.Names)
+        if (IsTagLabel(Query, token) && ReadMarkedTag(Query, token.End, &tag, &tagEnd))
         {
-            if (_wcsicmp(name.c_str(), token.c_str()) == 0)
-            {
-                seen = true;
-                break;
-            }
+            AddName(parsed.Names, tag);
+            continue;
         }
 
-        if (!seen)
+        before = readings.size();
+        ParseToken(token.Text, alone, readings);
+
+        if ((readings.size() == before) && IsNameToken(token.Text, alone))
         {
-            parsed.Names.push_back(token);
+            AddName(parsed.Names, token.Text);
         }
+
+        //
+        // A tag like Abc or 8042 reads as a number, so it's a name too, but
+        // only if it really is a tag, or "dead" would find every DEADLOCK.
+        //
+        if ((readings.size() != before) && alone && IsTagText(token.Text) && IsPoolTagName(token.Text.c_str()))
+        {
+            AddName(parsed.Names, token.Text);
+        }
+    }
+
+    //
+    // A tag with punctuation, like Lr!! or Gh?:, is only a name when it's the
+    // whole query, and the tokens would have split or trimmed it.
+    //
+    trimmed = Query;
+    trimmed.erase(0, trimmed.find_first_not_of(L" \t\r\n"));
+    trimmed.erase(trimmed.find_last_not_of(L" \t\r\n") + 1);
+
+    if (readings.empty() && IsTagText(trimmed) && !IsNameToken(trimmed, true))
+    {
+        parsed.Names = { trimmed };
     }
 
     //

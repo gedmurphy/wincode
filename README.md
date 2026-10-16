@@ -33,7 +33,8 @@ Enter opens the result in the window, Ctrl+C copies it as one line, and Esc
 clears then closes. Closing the window hides it; Exit on the tray icon quits.
 
 Every related code is a link. Following one is a new lookup, and Back and Forward
-(or Alt+Left and Alt+Right) retrace your steps. Part of a name is enough to
+(or Alt+Left and Alt+Right) retrace your steps. The × at the end of the search
+box, or Esc, clears it, and Back brings back what was there. Part of a name is enough to
 search, and the part that matched is highlighted:
 
 ![Searching for part of a name](docs/images/name-search.png)
@@ -57,16 +58,22 @@ with its own settings file is portable. The theme follows Windows.
 ## Your own codes
 
 WinCode can look up your own codes too: your driver's NTSTATUS codes, your
-HRESULTs and Win32 errors, and your pool tags. Put the header that defines them
-in the `codes` folder beside `settings.json`, or choose Your codes in settings
-and Add file to read one where it is, such as in your source tree.
+HRESULTs and Win32 errors, your IOCTLs and your pool tags. Put the header that
+defines them in the `codes` folder beside `settings.json`, or choose Your codes
+in settings and Add file to read one where it is, such as in your source tree.
 
-WinCode works out each `#define` itself, with no compiler: casts such as
+WinCode works out each definition itself, with no compiler: casts such as
 `((NTSTATUS)0xE0010001L)`, `MAKE_HRESULT` and `_HRESULT_TYPEDEF_`, your own
-macros and facilities, and names from the SDK. A four-character constant such
-as `'gaTM'` is a pool tag, named as a debugger shows it, and a `CTL_CODE` is an
-IOCTL. A comment after a
-`#define`, or a message compiler's MessageText block, is its text.
+macros and facilities, `?:`, and names from the SDK. A definition can be a
+`#define`, an enum member, a `const` or `constexpr` constant, or a call to one
+of your own macros that comes down to `Name = value`, such as
+`POOLTAG_DEF(MY_TAG, 'gaTM')`. If the macro's in a header WinCode doesn't read,
+a call with a name and a value is still read as `Name = value`. A four-character constant such as `'gaTM'` is a
+pool tag, named as a debugger shows it, and a `CTL_CODE` is an IOCTL. A comment
+on a definition's line, or a message compiler's MessageText block, is its text.
+
+A list of tags in the debugger's own `pooltag.txt` format, `MTag - mydrv.sys -
+request context`, works too, as a `.txt` file.
 
 A header is read again whenever it changes. Your codes lists each header with
 how many codes it gave and anything it couldn't work out, line by line, and
@@ -114,7 +121,9 @@ Manager problem codes, USB statuses and LDAP results), it knows:
   uninitialised stack, `0xFEEEFEEE` freed heap, `0xE06D7363` a C++ exception.
   A 64-bit `0xCCCCCCCCCCCCCCCC` counts too.
 - **Kernel pool tags**, from the debugger's own list: `MmSt`, or `0x20707249`, the
-  way `Irp ` reads in memory.
+  way `Irp ` reads in memory. A tag the list only covers with a pattern, like
+  `Gh?5`, is found as `Gh05`. In pasted text a tag needs a label, as in
+  `Pool tag: Ntfx` or a line from `!pool`, since plenty of tags are words.
 - **IOCTLs and FSCTLs**, from the SDK's and the WDK's headers: `0x70000` is
   `IOCTL_DISK_GET_DRIVE_GEOMETRY`, with its device type, function, method and
   access shown.

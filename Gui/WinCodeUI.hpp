@@ -333,6 +333,27 @@ PopupToggle (
 
 
 //
+// The × that clears a search box (ClearButton.cpp).
+//
+
+bool
+ClearButtonRegister (
+    _In_ HINSTANCE Instance
+    );
+
+HWND
+ClearButtonAttach (
+    _In_ HWND Edit,
+    _In_ int Id
+    );
+
+void
+ClearButtonSync (
+    _In_ HWND Edit
+    );
+
+
+//
 // Sent to the details pane's parent as WM_NOTIFY when a link to another code
 // is followed, with a DetailsLinkNotify.
 //

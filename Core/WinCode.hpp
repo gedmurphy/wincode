@@ -343,6 +343,11 @@ SearchNames (
     _In_z_ PCWSTR Text
     );
 
+bool
+IsPoolTagName (
+    _In_z_ PCWSTR Text
+    );
+
 
 std::wstring
 FormatCodeValue (
@@ -518,7 +523,9 @@ enum class UserTreatAs
     Automatic,  // Decided by how each code is written
     NtStatus,
     HResult,
-    WinError
+    WinError,
+    PoolTag,
+    Ioctl
 };
 
 /*!
@@ -574,6 +581,11 @@ struct HeaderRead
 {
     std::vector<HeaderCode> Codes;
     std::vector<HeaderSkip> Skipped;
+
+    //
+    // What it was read as, as in L"C/C++ header" or L"pool tag list".
+    //
+    PCWSTR Format;
 };
 
 /*!
@@ -603,11 +615,26 @@ struct UserHeader
     UserTreatAs TreatAs;
     size_t CodeCount;
     std::vector<HeaderSkip> Skipped;
+
+    //
+    // What it was read as, or an empty string if it couldn't be.
+    //
+    std::wstring Format;
 };
 
 std::vector<HeaderRead>
 ReadHeaders (
     _In_ const std::vector<HeaderSource>& Headers
+    );
+
+bool
+IsUserCodeFileName (
+    _In_ const std::wstring& Name
+    );
+
+std::wstring
+UserCodeFilePatterns (
+    void
     );
 
 bool
