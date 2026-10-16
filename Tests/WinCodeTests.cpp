@@ -1144,6 +1144,7 @@ TestUserCodes (
         L"// again.\n"
         L"//\n"
         L"#define MYDRV_STATUS_RETRY ((NTSTATUS)0x60010002L)\n"
+        L"#define MYDRV_CANCEL_TAG '!!rL'\n"
         L"#endif\n";
 
     static constexpr WCHAR k_Other[] =
@@ -1261,6 +1262,9 @@ TestUserCodes (
     match = FindMatch(matches, CodeKind::PoolTag);
     Check((match != nullptr) && (match->Names.size() == 2) && (match->Names[0] == L"MTag") && (match->Names[1] == L"MYDRV_TAG"),
           "a pool tag is named by its tag, then the header's name for it");
+
+    names = SearchNames(L"Lr!!");
+    Check((names.size() == 1) && (names[0].Name == L"Lr!!"), "a tag both Windows and your header have is found once");
 
     names = SearchNames(L"MYDRV_E_TIMEOUT");
     Check(!names.empty() && (names[0].Kind == CodeKind::HResult) && (names[0].Value == 0x81230002), "a name search finds the user's codes");
@@ -1465,6 +1469,7 @@ TestPoolTags (
     std::vector<CodeMatch> matches;
     std::vector<NameMatch> names;
     const CodeMatch* match;
+    ParsedQuery parsed;
 
     printf("Pool tags\n");
 
@@ -1477,6 +1482,55 @@ TestPoolTags (
     names = SearchNames(L"MmSt");
     Check(!names.empty() && (names[0].Kind == CodeKind::PoolTag) && (names[0].Name == L"MmSt"),
           "the tag MmSt is found by name");
+
+    matches = LookupValue(0x35306847);
+    match = FindMatch(matches, CodeKind::PoolTag);
+    Check((match != nullptr) && (match->Names.size() == 2) && (match->Names[0] == L"Gh05") && (match->Names[1] == L"Gh?5"),
+          "Gh05 is pooltag.txt's Gh?5, the most specific pattern that fits");
+
+    names = SearchNames(L"gh05");
+    Check(!names.empty() && (names[0].Kind == CodeKind::PoolTag) && (names[0].Name == L"Gh05") &&
+          (names[0].Value == 0x35306847) && (names[0].Quality == NameQuality::Exact),
+          "... and typing gh05 finds it, as Gh05");
+
+    names = SearchNames(L"Ntfx");
+    Check(!names.empty() && (names[0].Name == L"Ntfx") && (names[0].Value == 0x7866744E),
+          "tags are case sensitive, so Ntfx is ntfs.sys's Nt?? rather than the tag NtFX");
+
+    names = SearchNames(L"Lr!!");
+    Check(!names.empty() && (names[0].Name == L"Lr!!"), "a tag with punctuation is found by name");
+
+    parsed = ParseQuery(L"Lr!!");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"Lr!!"), "... and keeps its punctuation as a query");
+
+    parsed = ParseQuery(L"Pool tag: Ntfx");
+    Check(parsed.Numbers.empty() && (parsed.Names.size() == 1) && (parsed.Names[0] == L"Ntfx"),
+          "a tag after a label is a name in longer text");
+
+    parsed = ParseQuery(L"ffffa50f`6a2d1000 size: 60 previous size: 0  (Allocated) *MmSt");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"MmSt"), "... as is the tag in a line from !pool");
+
+    parsed = ParseQuery(L"Pooltag Irp+ : I/O verifier allocated IRP packets");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"Irp+"), "... and in !pool's Pooltag line");
+
+    parsed = ParseQuery(L"tag 'Irp '");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"Irp"), "... and in quotes, with its space");
+
+    parsed = ParseQuery(L"AfdA");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"AfdA") && !parsed.Numbers.empty(),
+          "a tag that reads as hex, like AfdA, is a name as well as a number");
+
+    parsed = ParseQuery(L"8042");
+    Check((parsed.Names.size() == 1) && (parsed.Names[0] == L"8042"), "... as is one of digits, like 8042");
+
+    parsed = ParseQuery(L"dead");
+    Check(parsed.Names.empty(), "... but a hex word that isn't a tag isn't");
+
+    parsed = ParseQuery(L"tag 5");
+    Check(parsed.Names.empty() && !parsed.Numbers.empty(), "\"tag 5\" is still a number");
+
+    parsed = ParseQuery(L"File not found (0x80070002)");
+    Check(parsed.Names.empty(), "a word that's also a tag, like File, isn't one unless it's labelled");
 
     matches = LookupValue(43);
     match = FindMatch(matches, CodeKind::DeviceProblem);

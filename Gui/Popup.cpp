@@ -111,6 +111,7 @@ static constexpr int k_ClipboardAttempts = 5;
 static constexpr DWORD k_ClipboardWaitMs = 20;
 
 static constexpr int k_EditId = 1;
+static constexpr int k_ClearId = 2;
 
 //
 // Segoe Fluent Icons' search glyph.
@@ -1394,6 +1395,27 @@ Activate (
 
 /*!
 
+    @brief Clears the query, from Esc or the search box's ×.
+
+*/
+static
+void
+ClearQuery (
+    void
+    )
+{
+    //
+    // Remember it before clearing, or dismissing with Esc, Esc would never
+    // leave anything in the recent lookups.
+    //
+    RememberSelected();
+    SetQuery(std::wstring());
+    SetFocus(g_Edit);
+}
+
+
+/*!
+
     @brief What Esc does, clearing the query, or hiding the popup when it's
            already clear.
 
@@ -1406,12 +1428,7 @@ Escape (
 {
     if (GetWindowTextLengthW(g_Edit) > 0)
     {
-        //
-        // Remember it before clearing, or dismissing with Esc, Esc would never
-        // leave anything in the recent lookups.
-        //
-        RememberSelected();
-        SetQuery(std::wstring());
+        ClearQuery();
         return;
     }
 
@@ -2440,9 +2457,19 @@ PopupProc (
         return 1;
 
     case WM_COMMAND:
-        if ((LOWORD(WParam) == k_EditId) && (HIWORD(WParam) == EN_CHANGE) && !g_SettingQuery)
+        if ((LOWORD(WParam) == k_EditId) && (HIWORD(WParam) == EN_CHANGE))
         {
-            RunQuery();
+            ClearButtonSync(g_Edit);
+
+            if (!g_SettingQuery)
+            {
+                RunQuery();
+            }
+        }
+
+        if ((LOWORD(WParam) == k_ClearId) && (HIWORD(WParam) == BN_CLICKED))
+        {
+            ClearQuery();
         }
         return 0;
 
@@ -2620,6 +2647,7 @@ PopupCreate (
 
     SendMessageW(g_Edit, EM_SETCUEBANNER, TRUE, RCAST(LPARAM)(L"Look up a code or a name, or paste log text"));
     SetWindowSubclass(g_Edit, PopupEditProc, 0, 0);
+    ClearButtonAttach(g_Edit, k_ClearId);
 
     //
     // Windows 11 rounds it like its own flyouts. Windows 10 doesn't know the

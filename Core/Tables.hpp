@@ -205,6 +205,13 @@ TableFindFirst (
     _In_ uint32_t Value
     );
 
+const TableEntry*
+FindPoolTagPattern (
+    _In_ const TableSpan& Table,
+    _In_ const std::string& Tag,
+    _In_ bool IgnoreCase
+    );
+
 std::wstring
 AsciiToWide (
     _In_z_ PCSTR Text

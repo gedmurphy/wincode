@@ -227,8 +227,8 @@ wWinMain (
     // The popup first, since the hotkey can fire as soon as the main window
     // registers it.
     //
-    if (!MainWindowRegister(Instance) || !DetailsPaneRegister(Instance) || !PopupRegister(Instance) ||
-        !PopupCreate(Instance))
+    if (!MainWindowRegister(Instance) || !DetailsPaneRegister(Instance) || !ClearButtonRegister(Instance) ||
+        !PopupRegister(Instance) || !PopupCreate(Instance))
     {
         return 1;
     }

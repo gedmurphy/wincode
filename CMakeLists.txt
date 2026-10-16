@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Ged Murphy. GPLv3 or later; see LICENSE.
 #
 cmake_minimum_required(VERSION 3.25)
-project(WinCode VERSION 2.0.0 LANGUAGES CXX RC)
+project(WinCode VERSION 2.1.0 LANGUAGES CXX RC)
 
 if(NOT MSVC)
     message(FATAL_ERROR "WinCode builds with MSVC only.")
@@ -97,6 +97,7 @@ target_link_libraries(wincode PRIVATE WinCodeCore)
 # clash with wincode.exe in the same directory.
 #
 add_executable(WinCodeUI WIN32
+    Gui/ClearButton.cpp
     Gui/DetailsPane.cpp
     Gui/Draw.cpp
     Gui/Hotkey.cpp

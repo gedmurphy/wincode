@@ -343,6 +343,11 @@ SearchNames (
     _In_z_ PCWSTR Text
     );
 
+bool
+IsPoolTagName (
+    _In_z_ PCWSTR Text
+    );
+
 
 std::wstring
 FormatCodeValue (

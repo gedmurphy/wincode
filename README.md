@@ -33,7 +33,8 @@ Enter opens the result in the window, Ctrl+C copies it as one line, and Esc
 clears then closes. Closing the window hides it; Exit on the tray icon quits.
 
 Every related code is a link. Following one is a new lookup, and Back and Forward
-(or Alt+Left and Alt+Right) retrace your steps. Part of a name is enough to
+(or Alt+Left and Alt+Right) retrace your steps. The × at the end of the search
+box, or Esc, clears it, and Back brings back what was there. Part of a name is enough to
 search, and the part that matched is highlighted:
 
 ![Searching for part of a name](docs/images/name-search.png)
@@ -114,7 +115,9 @@ Manager problem codes, USB statuses and LDAP results), it knows:
   uninitialised stack, `0xFEEEFEEE` freed heap, `0xE06D7363` a C++ exception.
   A 64-bit `0xCCCCCCCCCCCCCCCC` counts too.
 - **Kernel pool tags**, from the debugger's own list: `MmSt`, or `0x20707249`, the
-  way `Irp ` reads in memory.
+  way `Irp ` reads in memory. A tag the list only covers with a pattern, like
+  `Gh?5`, is found as `Gh05`. In pasted text a tag needs a label, as in
+  `Pool tag: Ntfx` or a line from `!pool`, since plenty of tags are words.
 - **IOCTLs and FSCTLs**, from the SDK's and the WDK's headers: `0x70000` is
   `IOCTL_DISK_GET_DRIVE_GEOMETRY`, with its device type, function, method and
   access shown.

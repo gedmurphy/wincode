@@ -42,6 +42,7 @@
 #include "Tables.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <cwctype>
 #include <format>
 
@@ -133,6 +134,176 @@ TableFindFirst (
     }
 
     return entry;
+}
+
+
+/*!
+
+    @brief Finds a table's pool tag patterns, like Gh?5.
+
+    @param[in] Table - The table.
+
+    @return Every entry of four characters or fewer with a ? or * in it.
+
+*/
+static
+std::vector<const TableEntry*>
+PoolTagPatterns (
+    _In_ const TableSpan& Table
+    )
+{
+    std::vector<const TableEntry*> patterns;
+
+    for (size_t i = 0; i < Table.Count; i++)
+    {
+        if ((strlen(Table.Entries[i].Name) <= 4) && (strpbrk(Table.Entries[i].Name, "?*") != nullptr))
+        {
+            patterns.push_back(&Table.Entries[i]);
+        }
+    }
+
+    return patterns;
+}
+
+
+/*!
+
+    @brief Finds the pooltag.txt pattern that covers a tag, like Gh?5 for Gh05.
+
+    @details pooltag.txt writes a family of tags with ? for any character and a
+             trailing * for any rest, so Gh05 is only there as Gh?5. When more
+             than one fits, the one with the most fixed characters wins, so
+             Gh05 is Gh?5 rather than Gh??.
+
+    @param[in] Table - The table.
+
+    @param[in] Tag - The tag's four characters, padded with spaces.
+
+    @param[in] IgnoreCase - True for a tag someone typed, which a search
+                            matches whatever its case.
+
+    @return The pattern's entry, or nullptr if none covers the tag.
+
+*/
+const TableEntry*
+FindPoolTagPattern (
+    _In_ const TableSpan& Table,
+    _In_ const std::string& Tag,
+    _In_ bool IgnoreCase
+    )
+{
+    //
+    // Only about a hundred of pooltag.txt's tags are patterns, so find them
+    // once rather than on every lookup.
+    //
+    static const std::vector<const TableEntry*> g_SdkPatterns = PoolTagPatterns(g_PoolTagTable);
+
+    std::vector<const TableEntry*> patterns;
+    const std::vector<const TableEntry*>* candidates;
+    const TableEntry* best;
+    size_t bestFixed;
+    size_t fixed;
+    size_t length;
+    char wanted;
+    char have;
+    bool fits;
+
+    best = nullptr;
+    bestFixed = 0;
+
+    if (Tag.size() != 4)
+    {
+        return nullptr;
+    }
+
+    candidates = &g_SdkPatterns;
+    if (&Table != &g_PoolTagTable)
+    {
+        patterns = PoolTagPatterns(Table);
+        candidates = &patterns;
+    }
+
+    for (const TableEntry* candidate : *candidates)
+    {
+        length = strlen(candidate->Name);
+        fits = true;
+        fixed = 0;
+
+        for (size_t j = 0; j < 4; j++)
+        {
+            //
+            // The table drops a tag's trailing spaces, so a short pattern
+            // ends in them.
+            //
+            wanted = (j < length) ? candidate->Name[j] : ' ';
+            have = Tag[j];
+
+            if (wanted == '*')
+            {
+                break;
+            }
+
+            if (wanted == '?')
+            {
+                continue;
+            }
+
+            if (IgnoreCase ? (_strnicmp(&wanted, &have, 1) != 0) : (wanted != have))
+            {
+                fits = false;
+                break;
+            }
+
+            fixed++;
+        }
+
+        if (fits && (fixed > bestFixed))
+        {
+            best = candidate;
+            bestFixed = fixed;
+        }
+    }
+
+    return best;
+}
+
+
+/*!
+
+    @brief A pool tag's characters, its bytes as they sit in memory, which is
+           how a debugger shows it.
+
+    @param[in] Value - The value.
+
+    @param[out] Tag - Receives the four characters.
+
+    @return True if every byte is a printable character, as in a tag, and the
+            first isn't a space.
+
+*/
+static
+bool
+PoolTagChars (
+    _In_ uint32_t Value,
+    _Out_ std::string* Tag
+    )
+{
+    char c;
+
+    Tag->clear();
+
+    for (int i = 0; i < 4; i++)
+    {
+        c = SCAST(char)((Value >> (8 * i)) & 0xFF);
+        if ((c < 0x20) || (c > 0x7E))
+        {
+            return false;
+        }
+
+        *Tag += c;
+    }
+
+    return (*Tag)[0] != ' ';
 }
 
 
@@ -966,6 +1137,8 @@ LookupValue (
     std::vector<CodeMatch> quiet;
     const TableEntry* first;
     const TableEntry* end;
+    const TableEntry* pattern;
+    std::string tag;
     CodeMatch match;
     SourceShow show;
     bool alwaysNamed;
@@ -986,6 +1159,14 @@ LookupValue (
         }
 
         first = TableFindFirst(*kindTable.Table, Value);
+        pattern = nullptr;
+
+        if ((first == nullptr) && (kindTable.Kind == CodeKind::PoolTag) && PoolTagChars(Value, &tag))
+        {
+            pattern = FindPoolTagPattern(*kindTable.Table, tag, false);
+            first = pattern;
+        }
+
         if (first == nullptr)
         {
             continue;
@@ -1003,10 +1184,27 @@ LookupValue (
 
         match.UserCode = kindTable.User;
 
-        end = kindTable.Table->Entries + kindTable.Table->Count;
-        for (const TableEntry* entry = first; (entry != end) && (entry->Value == Value); entry++)
+        //
+        // A tag pooltag.txt only has as a pattern is named as itself, with the
+        // pattern after it.
+        //
+        if (pattern != nullptr)
         {
-            match.Names.push_back(AsciiToWide(entry->Name));
+            match.Names.push_back(AsciiToWide(tag.c_str()));
+            while (match.Names[0].back() == L' ')
+            {
+                match.Names[0].pop_back();
+            }
+
+            match.Names.push_back(AsciiToWide(pattern->Name));
+        }
+        else
+        {
+            end = kindTable.Table->Entries + kindTable.Table->Count;
+            for (const TableEntry* entry = first; (entry != end) && (entry->Value == Value); entry++)
+            {
+                match.Names.push_back(AsciiToWide(entry->Name));
+            }
         }
 
         //
